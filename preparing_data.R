@@ -19,6 +19,11 @@ st_crs(h.squamatum)
 st_crs(f.loscosii)
 st_crs(study_area)
 
+protected <- st_transform(protected, 25830)
+h.squamatum <- st_transform(h.squamatum, 25830)
+study_area <- st_transform(study_area, 25830)
+f.loscosii <- st_transform(f.loscosii, 25830)
+
 # Fixing errors----
 ## Para evitar errores, inconsistencias o comportamientos inesperados en las operaciones espaciales
 ## cuando se trabaja con coordenadas geográficas. Transforma de esférico a plano.
@@ -29,6 +34,21 @@ sf_use_s2(FALSE)
 ## Tenemos que generar una capa de cuadrículas con el área de cada especie, de 100x100 metros?
 ## Si cae dentro de esa cuadrícula de 100x100 un punto, mantenemos la cuadrícula,
 ## así se genera una capa con la dsitribución y podemos ver mejor el área dentro de espacios protegidos.
+
+grid <- st_make_grid(
+  f.loscosii,
+  cellsize = 100,
+  square = TRUE
+)
+
+grid_sf <- st_sf(geometry = grid)
+grid_presencia <- grid_sf[lengths(st_intersects(grid_sf, f.loscosii)) > 0, ]
+
+# plot
+ggplot() +
+  geom_sf(data = grid_sf, fill = NA, color = "grey80", linewidth = 0.2) +
+  geom_sf(data = f.loscosii, color = "red", size = 1.5) +
+  theme_minimal()
 
 ## Which points of h.sq are inside a protected area??
 inside <- st_intersects(h.squamatum, protected)
