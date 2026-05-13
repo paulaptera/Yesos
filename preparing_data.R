@@ -8,60 +8,95 @@ library(here)
 # Data----
 
 protected <- st_read(here("dataset/spain_protected_areas.gpkg"))
-h.squamatum <- st_read(here("dataset/helianthemum_squamatum.gpkg"))
 study_area <- st_read(here("dataset/study_area.gpkg"))
 f.loscosii <- st_read(here("dataset/ferula_loscosii.gpkg"))
+peninsula <- st_read(here("dataset/peninsula.gpkg"))
 
 # Checking CRS----
 
 st_crs(protected)
-st_crs(h.squamatum)
 st_crs(f.loscosii)
 st_crs(study_area)
+
 
 protected <- st_transform(protected, 25830)
 h.squamatum <- st_transform(h.squamatum, 25830)
 study_area <- st_transform(study_area, 25830)
 f.loscosii <- st_transform(f.loscosii, 25830)
 
-# Fixing errors----
-## Para evitar errores, inconsistencias o comportamientos inesperados en las operaciones espaciales
-## cuando se trabaja con coordenadas geográficas. Transforma de esférico a plano.
-sf_use_s2(FALSE)
+## Reproyectar a un CRS métrico
+crs_metros <- 25830   # ETRS89 / UTM 30N
 
-# Analysis----
-## Create distribution area for each specie
-## Tenemos que generar una capa de cuadrículas con el área de cada especie, de 100x100 metros?
-## Si cae dentro de esa cuadrícula de 100x100 un punto, mantenemos la cuadrícula,
-## así se genera una capa con la dsitribución y podemos ver mejor el área dentro de espacios protegidos.
+f.loscosii <- st_transform(f.loscosii, crs_metros)
+study_area <- st_transform(study_area, crs_metros)
+peninsula <- st_transform(peninsula, crs_metros)
+protected <- st_transform(protected, crs_metros)
 
+## Crear rejilla SOLO sobre los puntos de la sp.
+
+# F. LOSCOSII
 grid <- st_make_grid(
   f.loscosii,
-  cellsize = 100,
+  cellsize = 1000,
   square = TRUE
 )
 
-grid_sf <- st_sf(geometry = grid)
-grid_presencia <- grid_sf[lengths(st_intersects(grid_sf, f.loscosii)) > 0, ]
+## Convertir la rejilla en sf
+grid_sf <- st_sf(id = 1:length(grid), geometry = grid)
 
-# plot
-ggplot() +
-  geom_sf(data = grid_sf, fill = NA, color = "grey80", linewidth = 0.2) +
-  geom_sf(data = f.loscosii, color = "red", size = 1.5) +
-  theme_minimal()
+## Seleccionar solo cuadrículas con presencia
 
-## Which points of h.sq are inside a protected area??
-inside <- st_intersects(h.squamatum, protected)
-h.squamatum$protected <- lengths(inside) > 0
-table(h.squamatum$protected)
-mean(h.squamatum$protected)*100
+grid_presencia_flos <- st_join(
+  grid_sf,
+  f.loscosii,
+  join = st_intersects,
+  left = FALSE
+)
 
-inside <- st_intersects(f.loscosii, protected)
-f.loscosii$protected <- lengths(inside) > 0
-table(f.loscosii$protected)
-f.loscosii_protected <- mean(f.loscosii$protected)*100
+## Eliminamos cuadrículas duplicadas
+grid_presencia_flos <- grid_presencia_flos |> 
+  distinct(id, .keep_all = TRUE)
 
-## Plotting
+## Recortamos al mapa de España
+grid_presencia_flos <- st_intersection(grid_presencia_flos, study_area)
 
+## Representamos
+plot(st_geometry(peninsula), col = "grey95")
 
+plot(
+  st_geometry(grid_presencia),
+  col = "red",
+  border = "red",
+  add = TRUE
+)
 
+# Exportar capa presencia
+
+grid_presencia_flos <- st_sf(geometry = st_geometry(grid_presencia_flos))
+
+st_write(
+  grid_presencia_flos,
+  here("dataset", "distribution_f.loscosii.gpkg"),
+  delete_dsn = TRUE
+)
+
+## Solapamiento----
+# Primero disolvemos las cuadrículas y luego ya calculamos
+
+presencia_dissolve <- st_union(grid_presencia_flos)
+flos_protected <- st_intersection(presencia_dissolve, protected)
+area_total <- st_area(presencia_dissolve)
+area_protegida <- st_area(flos_protected)
+porcentaje <- (area_protegida / area_total) * 100
+as.numeric(porcentaje)
+
+# ¿Qué porcentaje de España se encuentra protegida?
+
+spain_protected <- st_area(protected)
+area_spain <- st_area(study_area)
+
+porcentaje <- (
+  spain_protected / area_spain
+) * 100
+
+as.numeric(porcentaje)
