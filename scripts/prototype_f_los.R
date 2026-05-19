@@ -10,7 +10,7 @@ library(here)
 protected <- st_read(here("dataset/spain_protected_areas.gpkg"))
 study_area <- st_read(here("dataset/study_area.gpkg"))
 flos <- st_read(here("dataset/species/ferula_loscosii.gpkg"))
-peninsula <- st_read(here("dataset/peninsula.gpkg"))
+#peninsula <- st_read(here("dataset/peninsula.gpkg"))
 
 # Checking CRS----
 
