@@ -1,0 +1,4 @@
+Hacer buffer de 1km en cada pixel
+tamaño de buffer menos de 1km?
+preserved_specimen
+filtrar y eliminar datos duplicados
