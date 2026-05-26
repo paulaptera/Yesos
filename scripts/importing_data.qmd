@@ -21,15 +21,16 @@ Primero cargamos la lista de especies:
 species_list <- read.csv(here("dataset/names.csv"))
 ```
 
-Ahora conectamos con gbif y descargamos los datos:
+Ahora conectamos con gbif, descargamos los datos de la web que cumplan con el criterio de "Especimen preservado", lo transformamos a un geopackage y lo guardamos en su carpeta correspondiente.
 
 ```{r}
 #Creamos las carpetas donde irán los archivos
-
-dir.create(here("dataset", "csv"), showWarnings = FALSE)
+dir.create(
+  here("dataset", "distribution_species"),
+  showWarnings = FALSE
+)
 
 #Bucle
-
 for(sp in species_list$species){
 
   cat("\n====================\n")
@@ -51,53 +52,12 @@ for(sp in species_list$species){
     next
   }
 
-  # limpiar coordenadas vacías
+  # limpiar coordenadas
   datos <- datos %>%
     filter(
       !is.na(decimalLongitude),
       !is.na(decimalLatitude)
     )
-
-  # nombre archivo
-  sp_name <- gsub(" ", "_", sp)
-
-  # guardar csv
-  write.csv(
-    datos,
-    here(
-      "dataset",
-      "csv",
-      paste0(sp_name, ".csv")
-    ),
-    row.names = FALSE
-  )
-
-  cat("Guardado:", sp_name, "\n")
-
-  # liberar memoria
-  rm(occ, datos)
-  gc()
-}
-```
-
-Y después transformamos en .gpkg
-
-```{r}
-dir.create(here("dataset", "distribution_species"), showWarnings = FALSE)
-
-# listar csv
-files <- list.files(
-  here("dataset", "csv"),
-  pattern = "\\.csv$",
-  full.names = TRUE
-)
-
-for(f in files){
-
-  cat("\nProcesando:", basename(f), "\n")
-
-  # leer csv
-  datos <- read.csv(f)
 
   # convertir a sf
   datos_sf <- st_as_sf(
@@ -109,10 +69,8 @@ for(f in files){
     crs = 4326
   )
 
-  # nombre salida
-  out_name <- tools::file_path_sans_ext(
-    basename(f)
-  )
+  # nombre archivo
+  sp_name <- gsub(" ", "_", sp)
 
   # guardar gpkg
   st_write(
@@ -120,21 +78,32 @@ for(f in files){
     here(
       "dataset",
       "distribution_species",
-      paste0(out_name, ".gpkg")
+      paste0(sp_name, ".gpkg")
     ),
     delete_dsn = TRUE,
     quiet = TRUE
   )
 
-  cat("Guardado:", out_name, "\n")
+  cat("Guardado:", sp_name, "\n")
 
-  # liberar memoria
-  rm(datos, datos_sf)
+  rm(occ, datos, datos_sf)
   gc()
 }
 ```
 
-Tenemos hasta ahora una carpeta (csv) con los datos de las especies y otra carpeta con los .gpkg (distribution_species) de cada una de ellas. Yo quiero **eliminar los puntos** que se me salen de las regiones florísticas. Ahora sería sobreponer y recortar.
+Tenemos hasta ahora una carpeta con los geopackage(distribution_species) de cada una de ellas. Yo quiero **eliminar los puntos** que se me salen de las regiones florísticas. Ahora sería sobreponer y recortar.
+
+## Regiones florísticas
+
+Lo primero que vamos a hacer es separar de la capa original las diferentes regiones florísticas que son objeto de estudio en nuestro caso. Para ello primero cargaremos el shapefile y procederemos a agrupar por regiones. Todo ello siguiendo el artículo de –\>
+
+```         
+Loidi, J., & Vynokurov, D. (2024). The biogeographical kingdoms and regions of the world. Mediterranean Botany, 45(2), e92333. https://doi.org/10.5209/mbot.92333
+```
+
+```{r}
+
+```
 
 Posteriormente, con esto hecho, ¿deberíamos transformar las **coordenadas de referencia** de cada especie al correspondiente de su país o región florística? Y una vez transformado, vamos a calcular un **buffer** de 250m alrededor de cada punto.
 
