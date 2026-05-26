@@ -102,8 +102,73 @@ Loidi, J., & Vynokurov, D. (2024). The biogeographical kingdoms and regions of t
 ```
 
 ```{r}
+floristic_regions_total <- st_read(here("dataset/floristic_regions_total/Map_biogeographical_regions.shp"))
+```
+
+```{r}
+# desactivar s2
+sf_use_s2(FALSE)
+
+# carpeta salida
+dir.create(
+  here("dataset", "floristic_regions"),
+  showWarnings = FALSE
+)
+
+# eliminar NA
+regions <- unique(
+  na.omit(floristic_regions_total$bg_region)
+)
+
+# bucle
+for(reg in regions){
+
+  cat("\nProcesando:", reg, "\n")
+
+  try({
+
+    # filtrar y fusionar
+    reg_union <- floristic_regions_total %>%
+      filter(bg_region == reg) %>%
+      st_make_valid() %>%
+      summarise()
+
+    # comprobar que no esté vacío
+    if(nrow(reg_union) == 0 || all(st_is_empty(reg_union))){
+      cat("Geometría vacía\n")
+      next
+    }
+
+    # nombre limpio
+    reg_name <- gsub(" ", "_", reg)
+
+    # guardar gpkg
+    st_write(
+      reg_union,
+      here(
+        "dataset",
+        "floristic_regions",
+        paste0(reg_name, ".gpkg")
+      ),
+      delete_dsn = TRUE,
+      quiet = TRUE
+    )
+
+    cat("Guardado:", reg_name, "\n")
+
+    rm(reg_union)
+    gc()
+
+  }, silent = TRUE)
+}
+
+sf_use_s2(TRUE)
 
 ```
+
+- Hay que definir cuales son las regiones que vamos a usar. Después ver cómo eliminar los puntos de las especies que nos sobran.
+
+- Por otro lado tenemos que recortar las zonas protegidas del mundo que entran dentro de cada región para tener capas menos pesadas.
 
 Posteriormente, con esto hecho, ¿deberíamos transformar las **coordenadas de referencia** de cada especie al correspondiente de su país o región florística? Y una vez transformado, vamos a calcular un **buffer** de 250m alrededor de cada punto.
 
