@@ -13,6 +13,7 @@ library(here)
 library(sf)
 library(dplyr)
 library(rgbif)
+library(stringr)
 ```
 
 Primero cargamos la lista de especies:
@@ -24,71 +25,139 @@ species_list <- read.csv(here("dataset/names.csv"))
 Ahora conectamos con gbif, descargamos los datos de la web que cumplan con el criterio de "Especimen preservado", lo transformamos a un geopackage y lo guardamos en su carpeta correspondiente.
 
 ```{r}
-#Creamos las carpetas donde irán los archivos
-dir.create(
-  here("dataset", "distribution_species"),
-  showWarnings = FALSE
-)
 
-#Bucle
+# ==========================================
+# 1. PARTE DE LOS ARCHIVOS CSV
+# ==========================================
+
+
+# Crear carpeta si no existe
+dir.create(here("dataset", "csv_distribution_species"), showWarnings = FALSE)
+
+# Bucle de descarga
 for(sp in species_list$species){
 
   cat("\n====================\n")
-  cat("Descargando:", sp, "\n")
+  cat("Leyendo de la lista:", sp, "\n")
 
-  # búsqueda en GBIF
+  # 1. ¡LA CLAVE! Reemplazar cualquier espacio raro/web (como el C2A0) por un espacio normal
+  sp_normalizado <- str_replace_all(sp, "[[:space:] ]", " ") 
+  sp_normalizado <- trimws(gsub("\\s+", " ", sp_normalizado)) # Quita dobles espacios y extremos
+
+  cat("Buscando en GBIF de forma exacta como:", sp_normalizado, "\n")
+
+  # Búsqueda en GBIF
   occ <- occ_search(
-    scientificName = sp,
+    scientificName = sp_normalizado,
     hasCoordinate = TRUE,
     basisOfRecord = "PRESERVED_SPECIMEN",
-    limit = 20000
+    limit = 5000
   )
 
   datos <- occ$data
 
-  # comprobar si hay datos
-  if(nrow(datos) == 0){
-    cat("No hay datos\n")
+  if(is.null(datos) || nrow(datos) == 0){
+    cat("GBIF no devolvió nada para este nombre.\n")
     next
   }
 
-  # limpiar coordenadas
-  datos <- datos %>%
+  # 2. Filtrar exigiendo coincidencia EXACTA con el nombre y autor normalizado
+  datos_filtrados <- datos %>%
     filter(
       !is.na(decimalLongitude),
-      !is.na(decimalLatitude)
+      !is.na(decimalLatitude),
+      scientificName == sp_normalizado # Filtro estricto por autor
     )
 
-  # convertir a sf
-  datos_sf <- st_as_sf(
-    datos,
-    coords = c(
-      "decimalLongitude",
-      "decimalLatitude"
-    ),
-    crs = 4326
+  if(nrow(datos_filtrados) == 0){
+    cat("No hay datos que coincidan EXACTAMENTE con el nombre y autor:", sp_normalizado, "\n")
+    next
+  }
+
+  # Nombre de archivo seguro
+  sp_name <- gsub("[^[:alnum:]]", "_", sp_normalizado)
+  sp_name <- gsub("__+", "_", sp_name) # Evita muchos guiones bajos juntos
+
+  # Guardar csv
+  write.csv(
+    datos_filtrados,
+    here("dataset", "csv_distribution_species", paste0(sp_name, ".csv")),
+    row.names = FALSE
   )
 
-  # nombre archivo
-  sp_name <- gsub(" ", "_", sp)
+  cat("¡Guardado con éxito!", sp_name, ".csv\n")
 
-  # guardar gpkg
-  st_write(
-    datos_sf,
-    here(
-      "dataset",
-      "distribution_species",
-      paste0(sp_name, ".gpkg")
-    ),
-    delete_dsn = TRUE,
-    quiet = TRUE
-  )
-
-  cat("Guardado:", sp_name, "\n")
-
-  rm(occ, datos, datos_sf)
+  rm(occ, datos, datos_filtrados)
   gc()
 }
+```
+
+```{r}
+
+# ==========================================
+# 2. PROCESAMIENTO DE CSV A GEOPACKAGE (gpkg)
+# ==========================================
+
+# 1. Definir rutas de las carpetas
+carpeta_csv <- here("dataset", "csv_distribution_species")
+carpeta_gpkg <- here("dataset", "distribution_species")
+
+# Crear la carpeta de destino si no existe
+dir.create(carpeta_gpkg, showWarnings = FALSE)
+
+# 2. Listar todos los archivos .csv
+archivos_csv <- list.files(path = carpeta_csv, pattern = "\\.csv$", full.names = TRUE)
+
+if(length(archivos_csv) == 0){
+  stop("¡Ojo! No se han encontrado archivos .csv en la carpeta: ", carpeta_csv)
+}
+
+# 3. Bucle para transformar cada CSV local en GPKG
+for(ruta_archivo in archivos_csv){
+  
+  # Extraer el nombre del archivo (sin la ruta ni la extensión .csv)
+  nombre_base <- tools::file_path_sans_ext(basename(ruta_archivo))
+  
+  cat("\n====================\n")
+  cat("Procesando archivo local:", nombre_base, "\n")
+  
+  # Leer el CSV local
+  datos <- read.csv(ruta_archivo)
+  
+  # Comprobar por seguridad que el archivo no esté vacío
+  if(nrow(datos) == 0){
+    cat("El archivo CSV está vacío, saltando...\n")
+    next
+  }
+  
+  # Convertir el dataframe a objeto espacial (sf)
+  # Como los CSV ya están limpios, no hace falta volver a filtrar por NAs
+  datos_sf <- st_as_sf(
+    datos,
+    coords = c("decimalLongitude", "decimalLatitude"),
+    crs = 4326
+  )
+  
+  # Definir la ruta de salida del GeoPackage (.gpkg)
+  ruta_salida_gpkg <- here("dataset", "distribution_species", paste0(nombre_base, ".gpkg"))
+  
+  # Guardar como GeoPackage (.gpkg)
+  st_write(
+    datos_sf,
+    ruta_salida_gpkg,
+    delete_dsn = TRUE, # Si el archivo ya existía de antes, lo sobrescribe de forma limpia
+    quiet = TRUE
+  )
+  
+  cat("Capa espacial guardada con éxito en:", paste0(nombre_base, ".gpkg"), "\n")
+  
+  # Liberar memoria de los objetos grandes en R
+  rm(datos, datos_sf)
+  gc()
+}
+
+cat("\n====================\n")
+cat("¡Proceso completado! Todas las capas .gpkg se han generado correctamente.\n")
 ```
 
 Tenemos hasta ahora una carpeta con los geopackage(distribution_species) de cada una de ellas. Yo quiero **eliminar los puntos** que se me salen de las regiones florísticas. Ahora sería sobreponer y recortar.
@@ -167,6 +236,54 @@ sf_use_s2(TRUE)
 ```
 
 - Hay que definir cuales son las regiones que vamos a usar. Después ver cómo eliminar los puntos de las especies que nos sobran.
+
+### Regiones florísticas del estudio
+
+En nuestro estudio tenemos concretamente X zonas de estudio:
+
+- Mediterranean region –\> 5
+
+- Saharo-Sindian –\> 8
+
+- Ethiopian-Southarabian –\> 13
+
+- Irano-Turanian –\> 7
+
+- Australia –\>
+
+  - Central Australian (Eremean) –\> 35
+
+  - Southwestern Australian –\> 37
+
+  - North Australian –\> 34 ?????????
+
+  - Tasmanian-Southeastern Australian –\> 36 ???????
+
+- Sudáfrica –\>
+
+  - Karoo-Namibian –\> 16
+
+  - Capensis –\> 38 ???????
+
+- Sudamérica –\>
+
+  - Andean-Pacific –\> 30
+
+  - Central Chilean-Western Patagonian –\> 33 ???????
+
+- Norteamérica –\>
+
+  - Western North American (California and Great Basin) –\> 11
+
+  - Madrean –\> 26
+
+  - Antillean-Mesoamerican –\> 27 ???
+
+  - Rocky Mountains –\> 10 ???????
+
+  - North American Atlantic –\> 9 ????????
+
+<!-- -->
 
 - Por otro lado tenemos que recortar las zonas protegidas del mundo que entran dentro de cada región para tener capas menos pesadas.
 

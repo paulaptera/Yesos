@@ -1,4 +1,11 @@
-Hacer buffer de 1km en cada pixel
-tamaño de buffer menos de 1km?
-preserved_specimen
-filtrar y eliminar datos duplicados
+
+1º revisar si gypsófilas solo o gypsoclinas también
+2º hacer funcionar script con nombres científicos
+3º limpiar con paquete de R
+4º Hacer un buffer
+5º regiones florísticas ploteando los datos
+
+- ¿Cuántos metros de buffer? --> 250 metros
+- ¿Cuantas regiones florísticas?
+- ¿Qué filtrado hacemos de los posibles datos erróneos?
+- ¿Existe un csv con los nombres corregidos de las especies?
