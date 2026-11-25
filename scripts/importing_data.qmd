@@ -28,7 +28,7 @@ library(readxl)
 
 ## VERIFICACIÓN TAXONÓMICA EN GBIF
 
-## **Step 1: Read the taxa list and split each name into its parts**
+## Step 1: Read the taxa list and split each name into its parts
 
 I open the sheet "All taxa" from the dataset. It has 1199 taxa, and I only keep the TAXON column. Then I clean the names and split each one into small pieces: genus, species epithet, subspecies or variety (if there is one), and rank.
 
