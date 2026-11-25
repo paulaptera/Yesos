@@ -1,0 +1,30 @@
+3 categorias:
+
+alta
+media
+baja
+
+1º paises sin datos
+
+2º juan pablo paises con flora
+
+terminar listas especies maps --> hablar más adelante
+
+
+gypsoclinos y gypsofilos por separado
+
+fig 1. mapa distribución grid map nº sp por cuadricula de cada tipo (muestra hotspots)
+arriba sobre regiones (riqueza de sp por cuadricula) global
+abajo sobre zona de yesos o zonas áridas
+o incluso distribución global
+
+grado solapamiento de distintas floras (Pablo)
+
+fig 2. filogenia de gypsofitas
+
+fig 3. compara el area de distribución de las especies gypsofitas y halófiltas de mexico y españa
+
+fig 4. tabla cuanta area contenida en zonas protegidas por sp en cada region floristica
+nº sp incluidas en lista roja o catalogadas
+
+

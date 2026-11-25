@@ -1,0 +1,74 @@
+---
+title: "buffer_species"
+format: pdf
+editor: visual
+---
+
+## Crear el buffer
+
+Posteriormente, con esto hecho, ¿deberíamos transformar las **coordenadas de referencia** de cada especie al correspondiente de su país o región florística? Y una vez transformado, vamos a calcular un **buffer** de 250m alrededor de cada punto.
+
+```{r}
+
+## Cargar paquetes ##
+
+library(sf)
+library(here)
+```
+
+```{r}
+
+### CARGAMOS ARCHIVOS ####
+
+# Carpetas
+input_dir <- here("dataset", "gpkg_distribution_species")
+output_dir <- here("dataset", "buffer_distribution_species")
+
+# Crear carpeta de salida si no existe
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Listar todos los gpkg
+files <- list.files(
+  input_dir,
+  pattern = "\\.gpkg$",
+  full.names = TRUE
+)
+
+for (f in files) {
+
+  cat("\nProcesando:", basename(f), "\n")
+
+  # Leer capa
+  sp <- st_read(f, quiet = TRUE)
+
+  # CRS original
+  crs_original <- st_crs(sp)
+
+  # Pasar a un CRS métrico
+  sp_m <- st_transform(sp, 3857)
+
+  # Buffer de 200 m
+  sp_buffer <- st_buffer(sp_m, dist = 100)
+
+  # Volver al CRS original
+  sp_buffer <- st_transform(sp_buffer, crs_original)
+
+  # Nombre de salida
+  nombre_salida <- paste0(
+    tools::file_path_sans_ext(basename(f)),
+    "_buffer100m.gpkg"
+  )
+
+  # Guardar
+  st_write(
+    sp_buffer,
+    file.path(output_dir, nombre_salida),
+    delete_dsn = TRUE,
+    quiet = TRUE
+  )
+
+  cat("Guardado:", nombre_salida, "\n")
+}
+```
+
+Con el .gpkg del buffer de cada especie, ya quedaría la parte de sobreponer a la capa de zonas protegidas y calcular. ¿La capa de zonas protegidas debe contener los paises recortados con la regiones florísticas? ¿Y estas capa debe mantener separados los paises para poder discernir entre uno y otro?

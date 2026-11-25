@@ -1,0 +1,1172 @@
+---
+title: "Floristic regions"
+format: pdf
+editor: visual
+---
+
+## Regiones florísticas
+
+Lo primero que vamos a hacer es separar de la capa original las diferentes regiones florísticas que son objeto de estudio en nuestro caso. Para ello primero cargaremos el shapefile y procederemos a agrupar por regiones. Todo ello siguiendo el artículo de –\>
+
+Loidi, J., & Vynokurov, D. (2024). The biogeographical kingdoms and regions of the world. Mediterranean Botany, 45(2), e92333. <https://doi.org/10.5209/mbot.92333>
+
+```{r}
+
+floristic_regions_total <- st_read(here("dataset/floristic_regions_total/Map_biogeographical_regions.shp"))
+```
+
+```{r}
+
+# desactivar s2
+sf_use_s2(FALSE)
+
+# carpeta salida
+dir.create(
+  here("dataset", "floristic_regions"),
+  showWarnings = FALSE
+)
+
+# eliminar NA
+regions <- unique(
+  na.omit(floristic_regions_total$bg_region)
+)
+
+# bucle
+for(reg in regions){
+
+  cat("\nProcesando:", reg, "\n")
+
+  try({
+
+    # filtrar y fusionar
+    reg_union <- floristic_regions_total %>%
+      filter(bg_region == reg) %>%
+      st_make_valid() %>%
+      summarise()
+
+    # comprobar que no esté vacío
+    if(nrow(reg_union) == 0 || all(st_is_empty(reg_union))){
+      cat("Geometría vacía\n")
+      next
+    }
+
+    # nombre limpio
+    reg_name <- gsub(" ", "_", reg)
+
+    # guardar gpkg
+    st_write(
+      reg_union,
+      here(
+        "dataset",
+        "floristic_regions",
+        paste0(reg_name, ".gpkg")
+      ),
+      delete_dsn = TRUE,
+      quiet = TRUE
+    )
+
+    cat("Guardado:", reg_name, "\n")
+
+    rm(reg_union)
+    gc()
+
+  }, silent = TRUE)
+}
+
+sf_use_s2(TRUE)
+
+```
+
+- Hay que definir cuales son las regiones que vamos a usar. Después ver cómo eliminar los puntos de las especies que nos sobran. Nos vamos a quedar finalmente con las capas resultantes de la superposición de la distribución de las especies seleccionadas y las capas de las regiones florísticas.
+
+### Regiones florísticas del estudio
+
+En nuestro estudio tenemos concretamente X zonas de estudio:
+
+- Mediterranean region –\> 5
+
+- Saharo-Sindian –\> 8
+
+- Ethiopian-Southarabian –\> 13
+
+- Irano-Turanian –\> 7
+
+- Australia –\>
+
+  - Central Australian (Eremean) –\> 35
+
+  - Southwestern Australian –\> 37
+
+  - North Australian –\> 34 ?????????
+
+  - Tasmanian-Southeastern Australian –\> 36 ???????
+
+- Sudáfrica –\>
+
+  - Karoo-Namibian –\> 16
+
+  - Capensis –\> 38 ???????
+
+- Sudamérica –\>
+
+  - Andean-Pacific –\> 30
+
+  - Central Chilean-Western Patagonian –\> 33 ???????
+
+- Norteamérica –\>
+
+  - Western North American (California and Great Basin) –\> 11
+
+  - Madrean –\> 26
+
+  - Antillean-Mesoamerican –\> 27 ???
+
+  - Rocky Mountains –\> 10 ???????
+
+  - North American Atlantic –\> 9 ????????
+
+ATENCIÓN!! De momento, **India** y **Turquía** no comparten todas sus regiones protegidas.
+
+### Mediterráneo
+
+Primero desde protectedplanet.net me descargo tan solo los paises que entran dentro de la región florística mediterránea. Lo visualizo en QGIS primero y luego desde la web voy una a una descargando.
+
+UNEP-WCMC and IUCN (2026), Protected Planet: The World Database on Protected Areas (WDPA) and World Database on Other Effective Area-based Conservation Measures (WD-OECM) \[Online\], May 2026, Cambridge, UK: UNEP-WCMC and IUCN. Available at: [www.protectedplanet.net](http://protectedplanet.net/ "Visit Protected Planet").
+
+Para la región mediterránea me descargo: Portugal, España, Francia, Italia, Croatia, Albania, Grecia, Marruecos, Chipre, Siria, Líbano, Israel, Palestina, Libia, Túnez, Algeria y Turquía.
+
+Vamos a leer los shapefiles de cada pais primero. El problema es que no tengo siempre polígonos, también hay puntos.
+
+```{r}
+
+library(sf)
+library(dplyr)
+library(here)
+```
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "mediterranean")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_mediterranean <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_mediterranean,
+  here("dataset", "protected_area", "mediterranean","protected_mediterranean.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+wdpa_terrestrial <- protected_mediterranean |>
+  filter(
+    REALM == "Terrestrial"
+    )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "mediterranean",
+    "protected_mediterranean_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística ####
+
+med_region <- st_read(
+  here("dataset", "floristic_regions", "Mediterranean.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(med_region)
+
+wdpa_med <- st_intersection(
+  wdpa_terrestrial,
+  med_region
+)
+
+st_write(
+  wdpa_med,
+  here(
+    "dataset",
+    "protected_area",
+    "mediterranean",
+    "protected_mediterranean_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Australia
+
+Lo mismo pero con australia.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "australia")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_area_australia <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_area_australia,
+  here("dataset", "protected_area", "australia","protected_area_australia.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_area_australia |>
+  filter(
+    REALM == "Terrestrial"
+    )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "australia",
+    "protected_area_australia_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Central_Australian ####
+
+central_australian_region <- st_read(
+  here("dataset", "floristic_regions", "Central_Australian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(central_australian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_central_australian <- st_intersection(
+  wdpa_terrestrial,
+  central_australian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_central_australian,
+  here(
+    "dataset",
+    "protected_area",
+    "australia",
+    "protected_central_australian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Southwestern_Australian ####
+
+southwestern_australian_region <- st_read(
+  here("dataset", "floristic_regions", "Southwestern_Australian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(protected_area_australia)
+st_crs(southwestern_australian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_southwestern_australian <- st_intersection(
+  protected_area_australia,
+  southwestern_australian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_southwestern_australian,
+  here(
+    "dataset",
+    "protected_area",
+    "australia",
+    "protected_southwestern_asutralian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Horn of Africa
+
+Lo mismo pero con el cuerno de África.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "ethiopian_southarabian")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_area_horn <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_area_horn,
+  here("dataset", "protected_area", "ethiopian_southarabian","protected_area_horn.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_area_horn |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "ethiopian_southarabian",
+    "protected_area_horn_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+ethiopian_southarabian_region <- st_read(
+  here("dataset", "floristic_regions", "Ethiopian-Southarabian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(ethiopian_southarabian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_ethiopian_southarabian <- st_intersection(
+  wdpa_terrestrial,
+  ethiopian_southarabian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_ethiopian_southarabian,
+  here(
+    "dataset",
+    "protected_area",
+    "ethiopian_southarabian",
+    "protected_ethiopian_southarabian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Karoo Namibian
+
+Lo mismo pero con la región Karoo-Namibian.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "karoo_namibian")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_karoo_namibian <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_karoo_namibian,
+  here("dataset", "protected_area", "karoo_namibian","protected_karoo_namibian.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_karoo_namibian |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "karoo_namibian",
+    "protected_area_karoo_namibian_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+karoo_namibian_region <- st_read(
+  here("dataset", "floristic_regions", "Karoo-Namibian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(karoo_namibian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_namibian_region <- st_intersection(
+  wdpa_terrestrial,
+  karoo_namibian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_namibian_region,
+  here(
+    "dataset",
+    "protected_area",
+    "karoo_namibian",
+    "protected_karoo_namibian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Irano Turanian
+
+Lo mismo pero con la región Irano-Turanian.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "irano_turanian")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_irano_turanian <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_irano_turanian,
+  here("dataset", "protected_area", "irano_turanian","protected_irano_turanian.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_irano_turanian |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "irano_turanian",
+    "protected_area_irano_turanian_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+irano_turanian_region <- st_read(
+  here("dataset", "floristic_regions", "Irano-Turanian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(irano_turanian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_irano_turanian_region <- st_intersection(
+  wdpa_terrestrial,
+  irano_turanian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_irano_turanian_region,
+  here(
+    "dataset",
+    "protected_area",
+    "irano_turanian",
+    "protected_irano_turanian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Saharo Sindian
+
+Lo mismo pero con la región Saharo-Sindian.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "saharo_sindian")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_saharo_sindian <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_saharo_sindian,
+  here("dataset", "protected_area", "saharo_sindian","protected_saharo_sindian.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_saharo_sindian |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "saharo_sindian",
+    "protected_saharo_sindian_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+saharo_sindian_region <- st_read(
+  here("dataset", "floristic_regions", "Saharo-Sindian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(saharo_sindian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_saharo_sindian_region <- st_intersection(
+  wdpa_terrestrial,
+  saharo_sindian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_saharo_sindian_region,
+  here(
+    "dataset",
+    "protected_area",
+    "saharo_sindian",
+    "protected_saharo_sindian_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### C-Chilean W-Patagonian
+
+Lo mismo pero con la región C-Chilean W-Patagonian.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "c_chilean_w_patagonian")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_c_chilean_w_patagonian <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_c_chilean_w_patagonian,
+  here("dataset", "protected_area", "c_chilean_w_patagonian","protected_c_chilean_w_patagonian.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_c_chilean_w_patagonian |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "c_chilean_w_patagonian",
+    "protected_c_chilean_w_patagonian_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+c_chilean_w_patagonian_region <- st_read(
+  here("dataset", "floristic_regions", "C_Chilean-W_Patagonian.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(c_chilean_w_patagonian_region)
+
+sf_use_s2(FALSE)
+
+wdpa_c_chilean_w_patagonian_region <- st_intersection(
+  wdpa_terrestrial,
+  c_chilean_w_patagonian_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_c_chilean_w_patagonian_region,
+  here(
+    "dataset",
+    "protected_area",
+    "c_chilean_w_patagonian",
+    "protected_c_chilean_w_patagonian_region_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Andean Pacific
+
+Lo mismo pero con la región Andean_Pacific.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "andean_pacific")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_andean_pacific <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_andean_pacific,
+  here("dataset", "protected_area", "andean_pacific","protected_andean_pacific.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_andean_pacific |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "andean_pacific",
+    "protected_andean_pacific_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+andean_pacific_region <- st_read(
+  here("dataset", "floristic_regions", "Andean-Pacific.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(andean_pacific_region)
+
+sf_use_s2(FALSE)
+
+wdpa_andean_pacific_region <- st_intersection(
+  wdpa_terrestrial,
+  andean_pacific_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_andean_pacific_region,
+  here(
+    "dataset",
+    "protected_area",
+    "andean_pacific",
+    "protected_andean_pacific_region_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Madrean
+
+Lo mismo pero con la región Madrean.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "madrean")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_madrean <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_madrean,
+  here("dataset", "protected_area", "madrean","protected_madrean.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+
+wdpa_terrestrial <- protected_madrean |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "madrean",
+    "protected_madrean_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+madrean_region <- st_read(
+  here("dataset", "floristic_regions", "Madrean.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(madrean_region)
+
+sf_use_s2(FALSE)
+
+wdpa_madrean_region <- st_intersection(
+  wdpa_terrestrial,
+  madrean_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_madrean_region,
+  here(
+    "dataset",
+    "protected_area",
+    "madrean",
+    "protected_madrean_region_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Western N America
+
+Lo mismo pero con la región Western_N_America.
+
+```{r}
+
+# Carpeta principal
+dir_pa <- here("dataset", "protected_area", "western_n_america")
+
+# Buscar TODOS los shapefiles dentro de las subcarpetas
+shp_files <- list.files(
+  dir_pa,
+  pattern = "\\.shp$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+length(shp_files)  # para comprobar cuántos encuentra
+
+# Leer todos
+lista_sf <- lapply(shp_files, st_read, quiet = TRUE)
+
+# CRS de referencia (el del primero)
+crs_ref <- st_crs(lista_sf[[1]])
+
+# Reproyectar si fuese necesario
+lista_sf <- lapply(lista_sf, function(x) {
+  if (st_crs(x) != crs_ref) {
+    st_transform(x, crs_ref)
+  } else {
+    x
+  }
+})
+
+# Unir todos los shapefiles
+protected_western_n_america <- bind_rows(lista_sf)
+
+# Guardar
+st_write(
+  protected_western_n_america,
+  here("dataset", "protected_area", "western_n_america","protected_western_n_america.gpkg"),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+## Filtramos por Terrestre Y POR TIPO DE ESPACIO PROTEGIDO ###
+
+wdpa_terrestrial <- protected_western_n_america |>
+  filter(
+    REALM == "Terrestrial"
+  )
+
+st_write(
+  wdpa_terrestrial,
+  here(
+    "dataset",
+    "protected_area",
+    "western_n_america",
+    "protected_western_n_america_terrestrial.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+```{r}
+
+#### Recortamos por región florística Ethiopian-Southarabian ####
+
+western_n_america_region <- st_read(
+  here("dataset", "floristic_regions", "Western_N_America.gpkg"),
+  quiet = TRUE
+)
+
+st_crs(wdpa_terrestrial)
+st_crs(western_n_america_region)
+
+sf_use_s2(FALSE)
+
+wdpa_western_n_america_region <- st_intersection(
+  wdpa_terrestrial,
+  western_n_america_region
+)
+
+sf_use_s2(TRUE)
+
+st_write(
+  wdpa_western_n_america_region,
+  here(
+    "dataset",
+    "protected_area",
+    "western_n_america",
+    "protected_western_n_america_region_floristic.gpkg"
+  ),
+  delete_dsn = TRUE
+)
+```
+
+### Pequeño matiz
+
+Al final, he tomado la lista de paises que me facilitó Juan Pablo que contenía especies gipsófilas y halófilas. Por ello, he eliminado paises que había incluido (pero que NO contenían especies de este tipo) y otras que se quedaban fuera de las regiones, pero que contenían especies las hemos excluido.

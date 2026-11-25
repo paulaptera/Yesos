@@ -4,155 +4,844 @@ format: docx
 editor: visual
 ---
 
-## Importando data de GBIF
+## Setup: packages
 
-Cargamos librerías
+First, I load the R packages I need.
 
 ```{r}
 library(here)
-library(sf)
 library(dplyr)
-library(rgbif)
 library(stringr)
+library(httr)
+library(jsonlite)
+library(purrr)
+library(rgbif)
+library(ggplot2)
+library(sf)
+library(CoordinateCleaner)
+library(maps)
+library(tools)
+library(tibble)
+library(readxl)
+
 ```
 
-Primero cargamos la lista de especies:
+## VERIFICACIÓN TAXONÓMICA EN GBIF
+
+## **Step 1: Read the taxa list and split each name into its parts**
+
+I open the sheet "All taxa" from the dataset. It has 1199 taxa, and I only keep the TAXON column. Then I clean the names and split each one into small pieces: genus, species epithet, subspecies or variety (if there is one), and rank.
+
+Some names are written in a special way, for example "aff.", "sp." or hybrids. I don't change or delete them. I just mark them in a new column called "special_name", so I don't send them to GBIF.
 
 ```{r}
-species_list <- read.csv(here("dataset/names.csv"))
-```
+# ==========================================================
+# PASO 1: LEER LA LISTA Y SEPARAR CADA NOMBRE EN SUS PIEZAS
+# ==========================================================
 
-Ahora conectamos con gbif, descargamos los datos de la web que cumplan con el criterio de "Especimen preservado", lo transformamos a un geopackage y lo guardamos en su carpeta correspondiente.
-
-```{r}
-
-# ==========================================
-# 1. PARTE DE LOS ARCHIVOS CSV
-# ==========================================
-
-
-# Crear carpeta si no existe
-dir.create(here("dataset", "csv_distribution_species"), showWarnings = FALSE)
-
-# Bucle de descarga
-for(sp in species_list$species){
-
-  cat("\n====================\n")
-  cat("Leyendo de la lista:", sp, "\n")
-
-  # 1. ¡LA CLAVE! Reemplazar cualquier espacio raro/web (como el C2A0) por un espacio normal
-  sp_normalizado <- str_replace_all(sp, "[[:space:] ]", " ") 
-  sp_normalizado <- trimws(gsub("\\s+", " ", sp_normalizado)) # Quita dobles espacios y extremos
-
-  cat("Buscando en GBIF de forma exacta como:", sp_normalizado, "\n")
-
-  # Búsqueda en GBIF
-  occ <- occ_search(
-    scientificName = sp_normalizado,
-    hasCoordinate = TRUE,
-    basisOfRecord = "PRESERVED_SPECIMEN",
-    limit = 5000
+# Leo la hoja "All taxa" del excel que me han pasado (el archivo tiene más hojas, pero solo me interesa esta)
+species_list <- read_excel(
+  here("dataset", "World_Gypsum_taxa_list_final_17_nov.xlsx"),
+  sheet = "All taxa"
+) %>%
+  # El excel tiene más de 100 columnas y para consultar GBIF solo necesito el nombre. 
+  # Las demás las puedo volver a pegar luego con row_id.
+  select(TAXON, Category) %>%
+  mutate(
+    # Guardo el número de fila para no perder el orden original
+    row_id = row_number(),
+    # Quito espacios al principio/final y los dobles del medio
+    TAXON = str_squish(TAXON)
   )
 
-  datos <- occ$data
+# Ahora separo el nombre en trozos: género, epíteto, subsp./var., etc.
+# Me quedo solo con las primeras palabras, así la autoría me da igual.
+species_list <- species_list %>%
+  mutate(
+    # Género: la primera palabra (empieza por mayúscula)
+    genus = str_extract(TAXON, "^[A-Z][[:alpha:]-]+"),
+    
+    # Epíteto de la especie: la palabra que va justo después del género
+    specificEpithet = str_extract(TAXON, "(?<=^[A-Z][[:alpha:]-]{1,40}\\s)[[:alpha:]-]+"),
+    
+    # ¿Es subespecie o variedad? Lo miro buscando " subsp. " o " var. "
+    infra_marker = case_when(
+      str_detect(TAXON, "\\ssubsp\\.\\s") ~ "subsp.",
+      str_detect(TAXON, "\\svar\\.\\s")   ~ "var.",
+      TRUE ~ NA_character_
+    ),
+    
+    # Si hay subsp./var., cojo la palabra que viene justo después
+    infraspecificEpithet = case_when(
+      infra_marker == "subsp." ~ str_extract(TAXON, "(?<=subsp\\. )\\S+"),
+      infra_marker == "var."   ~ str_extract(TAXON, "(?<=var\\. )\\S+"),
+      TRUE ~ NA_character_
+    ),
+    
+    # El rango es lo que GBIF necesita saber: especie, subespecie o variedad
+    rank = if_else(is.na(infra_marker), "SPECIES",
+                   if_else(infra_marker == "subsp.", "SUBSPECIES", "VARIETY"))
+  )
 
-  if(is.null(datos) || nrow(datos) == 0){
-    cat("GBIF no devolvió nada para este nombre.\n")
-    next
-  }
+# Compruebo cuántos taxones voy a procesar
+cat("Total de taxones a comprobar:", nrow(species_list), "\n")
+```
 
-  # 2. Filtrar exigiendo coincidencia EXACTA con el nombre y autor normalizado
-  datos_filtrados <- datos %>%
-    filter(
-      !is.na(decimalLongitude),
-      !is.na(decimalLatitude),
-      scientificName == sp_normalizado # Filtro estricto por autor
+```{r}
+# Hay nombres que no son una especie "de verdad" y que no tiene sentido
+# buscar en GBIF tal cual. Los marco aquí para tratarlos aparte después.
+species_list <- species_list %>%
+  mutate(
+    # Los epítetos botánicos van siempre en minúscula, así que paso a minúscula
+    # el infraepíteto (hay un par con mayúscula, como por ejemplo "var. Zaragozae")
+    infraspecificEpithet = tolower(infraspecificEpithet),
+    
+    # Creamos una columna nueva llamada special_name donde ponemos casos raros
+    special_name = case_when(
+      # "aff." / "cf." = "afín a" / "comparar con": no es la especie en sí
+      str_detect(TAXON, "^[A-Z][[:alpha:]-]+\\s+(aff|cf)\\.?\\s") ~ "aff./cf.",
+      # "sp." = especie sin determinar (o sin describir)
+      str_detect(TAXON, "^[A-Z][[:alpha:]-]+\\s+sp\\.?(\\s|$)")   ~ "sp.",
+      # híbridos con el signo × entre género y epíteto
+      str_detect(TAXON, "^[A-Z][[:alpha:]-]+\\s+[×x]\\s")         ~ "hibrido",
+      # por si queda algún nombre raro al que no le he sacado género o epíteto
+      is.na(genus) | is.na(specificEpithet)                       ~ "no_parseable",
+      TRUE ~ NA_character_
     )
-
-  if(nrow(datos_filtrados) == 0){
-    cat("No hay datos que coincidan EXACTAMENTE con el nombre y autor:", sp_normalizado, "\n")
-    next
-  }
-
-  # Nombre de archivo seguro
-  sp_name <- gsub("[^[:alnum:]]", "_", sp_normalizado)
-  sp_name <- gsub("__+", "_", sp_name) # Evita muchos guiones bajos juntos
-
-  # Guardar csv
-  write.csv(
-    datos_filtrados,
-    here("dataset", "csv_distribution_species", paste0(sp_name, ".csv")),
-    row.names = FALSE
   )
+```
 
-  cat("¡Guardado con éxito!", sp_name, ".csv\n")
+## Step 2: Helper functions to query GBIF
 
-  rm(occ, datos, datos_filtrados)
-  gc()
+Here I only create the tools I will use later, so nothing is sent to GBIF yet. I make three small functions.
+
+- The first one asks GBIF if it knows a name and whether it is accepted.
+
+- The second one counts how many records GBIF has for a taxon.
+
+- The third one gets all the accepted names under a species (the species and its subspecies and varieties).
+
+I also save every answer in a "cache", so I never ask GBIF the same question twice.
+
+```{r}
+# ==========================================================
+# PASO 2: FUNCIONES PARA PREGUNTAR A GBIF (Y CACHÉS)
+# ==========================================================
+
+# Creo tres "cajones" vacíos donde voy guardando lo que GBIF me responde. Si más adelante me hace falta la misma respuesta, 
+# la saco del cajón en vez de volver a preguntar. Se vacían al cerrar R.
+cache_match       <- new.env()   # respuestas de "¿qué nombre es este?"
+cache_hijos       <- new.env()   # nombres aceptados bajo cada especie
+cache_ocurrencias <- new.env()   # nº de registros de cada taxón
+
+# --- Función 1: preguntar a GBIF si conoce un nombre ----------------------
+# Le paso género, epíteto, infraepíteto y rango, y GBIF me dice qué taxón del Backbone coincide y si está aceptado o es sinónimo.
+match_gbif <- function(genus, specificEpithet, infraspecificEpithet, rank) {
+  
+  # Hago una "etiqueta" única con los datos de la pregunta y miro si ya la había hecho antes. Si es así, 
+  # devuelvo la respuesta guardada.
+  key <- paste(genus, specificEpithet, rank, infraspecificEpithet, sep = "|")
+  if (exists(key, envir = cache_match)) return(get(key, envir = cache_match))
+  
+  # Los datos que le mando a GBIF. strict = "true" para que no me adivine nombres parecidos: o coincide o no coincide.
+  params <- list(
+    kingdom = "Plantae",
+    genus = genus,
+    specificEpithet = specificEpithet,
+    rank = rank,
+    strict = "true"
+  )
+  # El infraepíteto solo se manda si existe (en las especies no hay)
+  if (!is.na(infraspecificEpithet)) {
+    params$infraspecificEpithet <- infraspecificEpithet
+  }
+  
+  # Hago la petición. tryCatch es para que, si falla internet o GBIF no contesta, no se pare todo el script: 
+  # simplemente devuelve NULL.
+  resp <- tryCatch(
+    httr::GET("https://api.gbif.org/v1/species/match", query = params, httr::timeout(20)),
+    error = function(e) NULL
+  )
+  
+  # Si la respuesta es buena (código 200), convierto el JSON en una lista de R
+  out <- if (is.null(resp) || httr::status_code(resp) != 200) {
+    NULL
+  } else {
+    tryCatch(
+      jsonlite::fromJSON(httr::content(resp, as = "text", encoding = "UTF-8"), flatten = TRUE),
+      error = function(e) NULL
+    )
+  }
+  
+  # La guardo en el cajón y la devuelvo
+  assign(key, out, envir = cache_match)
+  out
+}
+
+# --- Función 2: contar cuántos registros tiene un taxón en GBIF -----------
+# Solo la usaré para los taxones ACEPTADOS.
+contar_ocurrencias <- function(usageKey) {
+  if (is.null(usageKey) || is.na(usageKey)) return(NA_integer_)
+  
+  # Otra vez: miro primero si ya lo tengo guardado
+  key <- as.character(usageKey)
+  if (exists(key, envir = cache_ocurrencias)) return(get(key, envir = cache_ocurrencias))
+  
+  # Le pregunto a GBIF cuántas ocurrencias hay para ese taxón
+  resp <- tryCatch(
+    httr::GET("https://api.gbif.org/v1/occurrence/count",
+              query = list(taxonKey = usageKey), httr::timeout(20)),
+    error = function(e) NULL
+  )
+  
+  # La respuesta es directamente un número, así que lo convierto a entero
+  n <- if (is.null(resp) || httr::status_code(resp) != 200) {
+    NA_integer_
+  } else {
+    suppressWarnings(as.integer(httr::content(resp, as = "text", encoding = "UTF-8")))
+  }
+  
+  assign(key, n, envir = cache_ocurrencias)
+  n
+}
+
+# --- Función 3: sacar todos los nombres aceptados bajo una especie --------
+# Para la columna "accepted_names_genus_sp": la especie + todas sus subespecies / variedades / formas que GBIF considera
+# válidas. Es lo que me sirve para revisar a mano si el nombre de mi lista cuadra.
+nombres_aceptados_bajo_especie <- function(usageKey_especie) {
+  if (is.null(usageKey_especie) || is.na(usageKey_especie)) return(NA_character_)
+  
+  key <- as.character(usageKey_especie)
+  if (exists(key, envir = cache_hijos)) return(get(key, envir = cache_hijos))
+  
+  # Primero miro la propia especie: ¿está aceptada? Si lo está, su nombre va a la lista.
+  resp_sp <- tryCatch(
+    httr::GET(paste0("https://api.gbif.org/v1/species/", usageKey_especie), httr::timeout(20)),
+    error = function(e) NULL
+  )
+  sp_info <- if (!is.null(resp_sp) && httr::status_code(resp_sp) == 200) {
+    tryCatch(jsonlite::fromJSON(httr::content(resp_sp, as = "text", encoding = "UTF-8"), flatten = TRUE),
+             error = function(e) NULL)
+  } else NULL
+  
+  nombres <- c()
+  if (!is.null(sp_info) && identical(sp_info$taxonomicStatus, "ACCEPTED")) {
+    nombres <- c(nombres, sp_info$scientificName %||% sp_info$canonicalName)
+  }
+  
+  # Luego pido los "hijos" de la especie (subespecies, variedades, formas)
+  resp_hijos <- tryCatch(
+    httr::GET(paste0("https://api.gbif.org/v1/species/", usageKey_especie, "/children"),
+              query = list(limit = 300), httr::timeout(20)),
+    error = function(e) NULL
+  )
+  hijos <- if (!is.null(resp_hijos) && httr::status_code(resp_hijos) == 200) {
+    tryCatch(jsonlite::fromJSON(httr::content(resp_hijos, as = "text", encoding = "UTF-8"), flatten = TRUE),
+             error = function(e) NULL)
+  } else NULL
+  
+  # A veces GBIF devuelve los hijos como tabla y otras como lista, así que los dejo siempre en forma de tabla para 
+  # poder trabajar igual con ellos
+  resultados_hijos <- NULL
+  if (!is.null(hijos) && !is.null(hijos$results)) {
+    if (is.data.frame(hijos$results)) {
+      resultados_hijos <- hijos$results
+    } else if (is.list(hijos$results) && length(hijos$results) > 0) {
+      resultados_hijos <- tryCatch(dplyr::bind_rows(hijos$results), error = function(e) NULL)
+    }
+  }
+  
+  # De los hijos me quedo solo con los ACEPTADOS (fuera sinónimos)
+  if (!is.null(resultados_hijos) && NROW(resultados_hijos) > 0 &&
+      all(c("taxonomicStatus", "rank", "scientificName") %in% names(resultados_hijos))) {
+    hijos_aceptados <- resultados_hijos %>%
+      filter(taxonomicStatus == "ACCEPTED",
+             rank %in% c("SUBSPECIES", "VARIETY", "FORM")) %>%
+      pull(scientificName)
+    nombres <- c(nombres, hijos_aceptados)
+  }
+  
+  # Lo junto todo en un solo texto separado por " ; " (o NA si no hay nada)
+  out <- if (length(nombres) == 0) NA_character_ else paste(unique(nombres), collapse = " ; ")
+  # Solo guardo en el cajón si GBIF me ha contestado de verdad.
+  # Si ha fallado (NULL), no lo guardo: así la próxima vez se vuelve a intentar.
+  if (!is.null(out)) assign(key, out, envir = cache_match)
+  out
 }
 ```
 
+## Step 3: Classify each taxon
+
+This function checks one taxon at a time. If the name is a special one, it goes straight to `MANUAL_REVIEW`. If not, I ask GBIF about the species first, to get the list of accepted names for later checking. Then I ask about the exact taxon from my list, and I check that GBIF gives me the same name I asked for.
+
+The result can be:
+
+- `ACCEPTED`: GBIF has this exact name and it is accepted. I also save the author and the number of records.
+- `NOT_ACCEPTED`: GBIF has this exact name, but it is a synonym or not clear.
+- `NOT_FOUND`: GBIF does not have this name.
+- `QUERY_ERROR`: I could not connect to GBIF.
+
+```{r}
+# ==========================================================
+# PASO 3: DECIDIR SI CADA TAXÓN ES ACEPTADO / NO ACEPTADO / NO ENCONTRADO
+# ==========================================================
+
+# Esta función se encarga de UNA fila de mi lista. Le paso las piezas del
+# nombre y me devuelve una fila con el resultado y unas cuantas columnas más.
+procesar_taxon <- function(genus, specificEpithet, infraspecificEpithet, rank,
+                           special_name = NA_character_) {
+  
+  # 0) Si el nombre es de los raros que marqué en el paso 1 (aff., sp.,    híbrido...), ni pregunto a GBIF: 
+  # lo dejo para revisar a mano.
+  if (!is.na(special_name)) {
+    return(tibble(
+      resultado = "MANUAL_REVIEW",
+      author_gbif = NA_character_,
+      status_gbif = NA_character_,
+      n_occurrences = NA_integer_,
+      name_found_gbif = NA_character_,
+      accepted_names_genus_sp = NA_character_
+    ))
+  }
+  
+  # 1) Pregunto primero por la ESPECIE (género + epíteto), aunque mi fila sea una subespecie.
+  # Lo hago para sacar todos los nombres aceptados de esa especie y ponerlos en la columna de revisión.
+  match_especie <- match_gbif(genus, specificEpithet, NA_character_, "SPECIES")
+  
+  usageKey_especie_aceptada <- NA_integer_
+  if (!is.null(match_especie) && !is.null(match_especie$usageKey) &&
+      identical(match_especie$rank, "SPECIES")) {
+    if (identical(match_especie$status, "ACCEPTED")) {
+      # La especie está aceptada: me quedo con su número
+      usageKey_especie_aceptada <- match_especie$usageKey
+    } else if (!is.null(match_especie$acceptedUsageKey)) {
+      # Es un sinónimo: me quedo con el número del nombre válido
+      usageKey_especie_aceptada <- match_especie$acceptedUsageKey
+    }
+  }
+  
+  nombres_aceptados <- nombres_aceptados_bajo_especie(usageKey_especie_aceptada)
+  
+  # 2) Ahora pregunto por el taxón EXACTO de mi lista (con su subsp./var. si la tiene). 
+  # En las especies esta pregunta es igual que la anterior, así que la respuesta sale de la caché y no se repite.
+  match_exacto <- match_gbif(genus, specificEpithet, infraspecificEpithet, rank)
+  
+  # 3a) Si ni siquiera he podido hablar con GBIF (internet caído, etc.), lo
+  #     marco como error. No quiero decir que la planta no existe si en
+  #     realidad es que no he podido preguntar.
+  if (is.null(match_exacto)) {
+    return(tibble(
+      resultado = "QUERY_ERROR",
+      author_gbif = NA_character_,
+      status_gbif = NA_character_,
+      n_occurrences = NA_integer_,
+      name_found_gbif = NA_character_,
+      accepted_names_genus_sp = nombres_aceptados
+    ))
+  }
+  
+  # 3b) GBIF ha contestado pero dice que no conoce ese nombre: NO_ENCONTRADO
+  if (is.null(match_exacto$usageKey) || identical(match_exacto$matchType, "NONE")) {
+    return(tibble(
+      resultado = "NOT_FOUND",
+      author_gbif = NA_character_,
+      status_gbif = NA_character_,
+      n_occurrences = NA_integer_,
+      name_found_gbif = NA_character_,
+      accepted_names_genus_sp = nombres_aceptados
+    ))
+  }
+  
+  # 4) GBIF ha devuelto algo, pero quiero asegurarme de que es lo que pedí.
+  #    Parto el nombre que me da GBIF en palabras y quito las etiquetas ("subsp.", "var."...) 
+  #    para quedarme solo con género, epíteto e infraepíteto.
+  canonicalName  <- match_exacto$canonicalName %||% NA_character_   # %||% = "si no hay, usa esto otro"
+  canonical_palabras <- if (!is.na(canonicalName)) {
+    palabras <- str_split(str_squish(canonicalName), "\\s+")[[1]]
+    palabras[!tolower(palabras) %in% c("subsp.", "var.", "f.", "forma")]
+  } else character(0)
+  
+  # Comparo con lo que pedí (en minúsculas, para no fallar por mayúsculas):
+  #  - especie: coinciden género y epíteto
+  #  - subsp./var.: coinciden género, epíteto y también el infraepíteto
+  coincide_nombre <- if (rank == "SPECIES") {
+    length(canonical_palabras) >= 2 &&
+      tolower(canonical_palabras[1]) == tolower(genus) &&
+      tolower(canonical_palabras[2]) == tolower(specificEpithet)
+  } else {
+    length(canonical_palabras) >= 3 &&
+      tolower(canonical_palabras[1]) == tolower(genus) &&
+      tolower(canonical_palabras[2]) == tolower(specificEpithet) &&
+      tolower(canonical_palabras[length(canonical_palabras)]) == tolower(infraspecificEpithet)
+  }
+  
+  status_gbif <- match_exacto$status %||% NA_character_
+  scientificName <- match_exacto$scientificName %||% match_exacto$canonicalName %||% NA_character_
+  
+  # La autoría es lo que sobra al quitar el nombre sin autor del nombre completo.
+  # OJO: en subespecies y variedades el nombre completo lleva "subsp." o "var." en medio, 
+  # y el nombre sin autor puede no llevarlo, así que no sirve quitarlo tal cual. Por eso construyo un patrón 
+  # con las palabras del nombre, dejando opcional la etiqueta entre ellas.
+  author_gbif <- NA_character_
+  if (!is.na(scientificName) && length(canonical_palabras) >= 2) {
+    patron_nombre <- paste(
+      canonical_palabras,
+      collapse = "(?:\\s+(?:subsp\\.|var\\.|f\\.))?\\s+"
+    )
+    author_gbif <- str_trim(str_remove(str_squish(scientificName), paste0("^", patron_nombre)))
+  }
+  # Si no queda nada (como en las subespecies autónimas), no hay autor
+  if (!is.na(author_gbif) && author_gbif == "") author_gbif <- NA_character_
+  
+  # Si no coincide con lo que pedí, NO_ENCONTRADO, pero guardo qué nombre me dio GBIF para poder mirarlo después.
+  if (!coincide_nombre) {
+    return(tibble(
+      resultado = "NOT_FOUND",
+      author_gbif = NA_character_,
+      status_gbif = NA_character_,
+      n_occurrences = NA_integer_,
+      name_found_gbif = scientificName,
+      accepted_names_genus_sp = nombres_aceptados
+    ))
+  }
+  
+  # 5) Coincide y está aceptado: ACEPTADO. Aquí sí cuento sus ocurrencias.
+  if (identical(status_gbif, "ACCEPTED")) {
+    n_occ <- contar_ocurrencias(match_exacto$usageKey)
+    return(tibble(
+      resultado = "ACCEPTED",
+      author_gbif = author_gbif,
+      status_gbif = status_gbif,
+      n_occurrences = n_occ,
+      name_found_gbif = scientificName,
+      accepted_names_genus_sp = nombres_aceptados
+    ))
+  }
+  
+  # 6) Coincide pero NO está aceptado (sinónimo, dudoso...): NO_ACEPTADO
+  tibble(
+    resultado = "NOT_ACCEPTED",
+    author_gbif = NA_character_,
+    status_gbif = status_gbif,
+    n_occurrences = NA_integer_,
+    name_found_gbif = scientificName,
+    accepted_names_genus_sp = nombres_aceptados
+  )
+}
+```
+
+## Step 4: Run the classification over the whole list
+
+I use a loop to repeat Step 3 for every taxon in my list. If one row fails, the loop keeps going. At the end, I put everything in one table, "tabla_final", and I count how many taxa are in each group.
+
+```{r}
+# ==========================================================
+# PASO 4: RECORRER LA LISTA Y PROCESAR CADA TAXÓN
+# ==========================================================
+
+
+filas_a_procesar <- seq_len(nrow(species_list))
+
+# Una lista vacía con un hueco por cada fila que voy a procesar
+resultados <- vector("list", length(filas_a_procesar))
+
+for (k in seq_along(filas_a_procesar)) {
+  
+  # Cojo la fila que toca y escribo en la consola por dónde voy
+  i <- filas_a_procesar[k]
+  fila <- species_list[i, ]
+  cat(sprintf("[%d/%d] %s\n", k, length(filas_a_procesar), fila$TAXON))
+  
+  # Llamo a la función del paso 3. El tryCatch es una red de seguridad:
+  # si pasa algo inesperado con una fila, no se para todo; esa fila queda
+  # como ERROR_CONSULTA y sigo con la siguiente.
+  res <- tryCatch(
+    procesar_taxon(
+      genus = fila$genus,
+      specificEpithet = fila$specificEpithet,
+      infraspecificEpithet = fila$infraspecificEpithet,
+      rank = fila$rank,
+      special_name = fila$special_name
+    ),
+    error = function(e) tibble(
+      resultado = "QUERY_ERROR",
+      author_gbif = NA_character_,
+      status_gbif = NA_character_,
+      n_occurrences = NA_integer_,
+      name_found_gbif = NA_character_,
+      accepted_names_genus_sp = NA_character_
+    )
+  )
+  
+  # Pego los datos de mi lista (TAXON, género...) con el resultado de GBIF
+  resultados[[k]] <- bind_cols(fila, res)
+  
+  # Pausa de 0.1 segundos entre filas para no agobiar a GBIF
+  Sys.sleep(0.1)
+}
+
+# Junto todas las filas en una sola tabla
+tabla_final <- bind_rows(resultados)
+
+# Un resumen rápido de cuántos hay de cada tipo
+print(table(tabla_final$resultado))
+```
+
+## Step 5: Export the results
+
+I save the final table as a CSV file, ready to open in Excel. The new columns are:
+
+- `author_gbif`: the author of the name in GBIF.
+- `n_occurrences`: number of GBIF records (only for accepted taxa).
+- `name_found_gbif`: the name that GBIF gave me.
+- `accepted_names_genus_sp`: all the accepted names under that genus and species, so I can check them by hand.
+
+```{r}
+# ==========================================================
+# PASO 5: GUARDAR LA TABLA FINAL
+# ==========================================================
+
+# Creo la carpeta de salida
+dir.create(here("dataset", "verificacion_gbif"), showWarnings = FALSE, recursive = TRUE)
+
+# Guardo la tabla en CSV.
+readr::write_excel_csv(
+  tabla_final,
+  here("dataset", "verificacion_gbif", "tabla_estado_taxonomico.csv")
+)
+
+# Resumen final: cuántos taxones hay de cada tipo
+cat("\n=========================================\n")
+cat("RESUMEN\n")
+print(table(tabla_final$resultado))
+cat("=========================================\n")
+cat("Archivo guardado en dataset/verificacion_gbif/tabla_estado_taxonomico.csv\n")
+```
+
+## Summary figure
+
+I make two simple charts that shows how many taxa are in each group, and I save them as an image.
+
+```{r}
+
+# 1. Preparamos los datos: contar cuántas especies hay en cada categoría y calcular porcentajes
+datos_quesito <- tabla_final %>%
+  filter(!is.na(resultado) & resultado != "") %>% # Quitamos filas vacías si las hay
+  count(resultado) %>%
+  mutate(
+    porcentaje = n / sum(n) * 100,
+    etiqueta = paste0(resultado, "\n", n, " (", round(porcentaje, 1), "%)")
+  )
+
+# Generamos diagrama de quesitos
+grafico_pie <- ggplot(datos_quesito, aes(x = "", y = n, fill = etiqueta)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0) +
+  scale_fill_brewer(palette = "Pastel1") +
+  theme_void() +
+  labs(
+    title = "Taxonomic status in GBIF",
+    fill = "Results"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "right"
+  )
+
+# Generamos un gráfico de barras
+grafico_barras <- ggplot(datos_quesito, aes(x = reorder(resultado, n), y = n, fill = resultado)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = paste0(n, " (", round(porcentaje, 1), "%)")), hjust = -0.1) +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +  # un poco de aire para las etiquetas
+  scale_fill_brewer(palette = "Pastel1") +
+  theme_minimal() +
+  labs(x = NULL, y = "Number of taxa", title = "Taxonomic status in GBIF")
+
+# Guardamos el gráfico
+ggsave(here("dataset", "verificacion_gbif", "grafico_quesitos_estado_taxonomico.png"),
+       plot = grafico_pie, width = 8, height = 6, dpi = 300)
+ggsave(here("dataset", "verificacion_gbif", "grafico_barras_estado_taxonomico.png"),
+       plot = grafico_barras, width = 8, height = 6, dpi = 300)
+```
+
+## **Paso 2:** Descarga de los CSV individuales desde GBIF.
+
+Ahora conectamos con gbif, descargamos los datos de la web que cumplan con el criterio de "Especimen preservado", nos descargamos cada especie en su csv y lo guardamos en su carpeta correspondiente.
+
+```{r}
+# ==========================================================
+# PASO 1: CARGA DE LA TABLA TAXONÓMICA CONSOLIDADA
+# ==========================================================
+
+# Paso 1.1: Leer el archivo de estado taxonómico generado en la etapa anterior
+tabla_final <- read.csv(
+  here("dataset", "verificacion_gbif", "tabla_estado_taxonomico.csv"), 
+  stringsAsFactors = FALSE
+)
+
+# ==========================================================
+# PASO 2: FILTRADO DE TAXONES VÁLIDOS Y ACEPTADOS
+# ==========================================================
+
+# Paso 2.1: Filtrar el set de datos para extraer únicamente los nombres científicos catalogados como "ACCEPTED"
+taxones_aceptados <- tabla_final %>%
+  filter(resultado == "ACCEPTED") %>%
+  pull(name_found_gbif) %>%
+  unique()
+
+# Paso 2.2: Imprimir en la consola el volumen total de especies que serán procesadas de forma individual
+cat("Total de especies aceptadas a descargar individualmente:", length(taxones_aceptados), "\n")
+
+# ==========================================================
+# PASO 3: PREPARACIÓN DEL DIRECTORIO DE ALMACENAMIENTO
+# ==========================================================
+
+# Paso 3.1: Definir la ruta física de la carpeta para los archivos CSV de distribución
+carpeta_salida <- here("dataset", "csv_distribution_species")
+
+# Paso 3.2: Crear de manera segura la carpeta de salida en el disco si no existe previamente
+dir.create(carpeta_salida, showWarnings = FALSE, recursive = TRUE)
+
+# ==========================================================
+# PASO 4: EJECUCIÓN DEL BUCLE DE DESCARGA DESDE GBIF
+# ==========================================================
+
+# Paso 4.1: Iniciar la iteración secuencial para consultar registro por registro cada especie aceptada
+for (i in seq_along(taxones_aceptados)) {
+  
+  # Paso 4.1.1: Aislar el taxón correspondiente a la iteración actual
+  especie_actual <- taxones_aceptados[i]
+  cat(sprintf("[%d/%d] Descargando: %s...\n", i, length(taxones_aceptados), especie_actual))
+  
+  # Paso 4.1.2: Normalizar y limpiar el nombre científico reemplazando espacios y caracteres por guiones bajos
+  nombre_archivo_limpio <- str_replace_all(especie_actual, "[[:punct:]\\s]+", "_")
+  ruta_csv <- file.path(carpeta_salida, paste0(nombre_archivo_limpio, ".csv"))
+  
+  # Paso 4.1.3: Realizar la consulta a la API de GBIF limitando a especímenes preservados y controlando fallos de red
+  resultado <- tryCatch({
+    occ_search(
+      scientificName = especie_actual,
+      basisOfRecord = "PRESERVED_SPECIMEN",
+      limit = 100000 
+    )
+  }, error = function(e) {
+    cat("  -> Error al conectar con GBIF para esta especie.\n")
+    NULL
+  })
+  
+  # Paso 4.1.4: Validar que la respuesta contenga una estructura correcta y registros físicos aprovechables
+  if (!is.null(resultado) && !is.null(resultado$data) && nrow(resultado$data) > 0) {
+    
+    # Paso 4.1.5: Escribir el DataFrame con las ocurrencias obtenidas directamente en su archivo CSV individual
+    write.csv(resultado$data, ruta_csv, row.names = FALSE)
+    cat(sprintf("  -> Guardado con éxito (%d registros).\n", nrow(resultado$data)))
+    
+  } else {
+    cat("  -> Sin registros de especímenes preservados en GBIF.\n")
+  }
+  
+  # Paso 4.1.6: Pausar la ejecución por 0.2 segundos para respetar los límites de transferencia del servidor
+  Sys.sleep(0.2)
+}
+
+# ==========================================================
+# PASO 5: NOTIFICACIÓN DE FINALIZACIÓN DEL PROCESO
+# ==========================================================
+
+# Paso 5.1: Imprimir en la consola el reporte de cierre del proceso de descarga
+cat("\n=========================================\n")
+cat("¡PROCESO FINALIZADO!\n")
+cat("Revisa la carpeta: dataset/ocurrencias_por_especie/\n")
+cat("=========================================\n")
+
+```
+
+## Paso 3: Limpiar csv con CoordinateCleaner.
+
+Vamos a limpiar lo siguiente:
+
+- **Ceros geográficos:** Coordenadas en el punto `(0, 0)`.
+
+- **Coordenadas idénticas:** Latitud y longitud con el mismo valor (error de transcripción).
+
+- **Capitales:** Puntos ubicados exactamente sobre capitales de países.
+
+- **Centroides:** Puntos en el centro geométrico de países o regiones (ubicaciones por defecto).
+
+- **Instituciones científicas:** Museos, herbarios, zoológicos o universidades (dónde se guarda el espécimen, no dónde se recolectó).
+
+- **Puntos en el mar:** Registros de especies terrestres que caen en el océano (por inversión de signos).
+
+- **Outliers espaciales:** Observaciones geográficamente aisladas y muy alejadas del núcleo de la especie.
+
+```{r}
+
+# ==========================================================
+#      LIMPIEZA DE COORDENADAS CON COORDINATECLEANER
+# ==========================================================
+
+
+# Paso 1: Definir las rutas de las carpetas de origen y de destino limpio
+carpeta_origen_csv <- here("dataset", "csv_distribution_species")
+carpeta_destino_clean <- here("dataset", "csv_distribution_species_clean")
+
+# Paso 2: Crear la nueva carpeta de destino limpio si no existe previamente
+dir.create(carpeta_destino_clean, showWarnings = FALSE, recursive = TRUE)
+
+# Paso 3: Listar todos los archivos CSV descargados que necesitan ser limpiados
+archivos_csv_originales <- list.files(path = carpeta_origen_csv, pattern = "\\.csv$", full.names = TRUE)
+
+if(length(archivos_csv_originales) == 0){
+  stop("¡Ojo! No se han encontrado archivos .csv en la carpeta: ", carpeta_origen_csv)
+}
+
+# Paso 4: Bucle para aplicar los filtros geográficos especie por especie
+for (ruta_archivo in archivos_csv_originales) {
+  
+  # Paso 4.1: Extraer el nombre base del archivo para identificar la especie
+  nombre_base <- tools::file_path_sans_ext(basename(ruta_archivo))
+  
+  cat("\n====================\n")
+  cat("Limpiando coordenadas de:", nombre_base, "\n")
+  
+  # Paso 4.2: Leer el archivo CSV con las ocurrencias originales de la especie
+  datos_especie <- read.csv(ruta_archivo)
+  
+  # Paso 4.3: Comprobar que el archivo contiene registros antes de analizarlo
+  if(nrow(datos_especie) == 0){
+    cat("  -> El archivo original está vacío, saltando...\n")
+    next
+  }
+  
+  # Paso 4.4: Asegurar que existan coordenadas válidas (no NAs) para evitar que falle CoordinateCleaner
+  datos_georreferenciados <- datos_especie[!is.na(datos_especie$decimalLongitude) & 
+                                             !is.na(datos_especie$decimalLatitude), ]
+  
+  # Paso 4.5: Comprobar que quedan registros con coordenadas válidas para analizar
+  if(nrow(datos_georreferenciados) == 0){
+    cat("  -> El archivo no contiene coordenadas para analizar, saltando...\n")
+    next
+  }
+  
+  # Paso 4.6: Ejecutar los tests automáticos de CoordinateCleaner (capitales, instituciones, mar, etc.)
+  resultados_limpieza <- tryCatch({
+    clean_coordinates(
+      x = datos_georreferenciados,
+      lon = "decimalLongitude",
+      lat = "decimalLatitude",
+      species = "species",
+      tests = c("cap", "centroids", "equal", "institutions", "zeros", "sea", "outliers"),
+      verbose = FALSE # Silenciar mensajes individuales de la función para mantener limpia la consola
+    )
+  }, error = function(e) {
+    cat("  -> Error al procesar los filtros de CoordinateCleaner en esta especie.\n")
+    NULL
+  })
+  
+  # Paso 4.7: Guardar el CSV limpio solo si los tests de calidad se completaron correctamente
+  if (!is.null(resultados_limpieza)) {
+    
+    # Paso 4.7.1: Filtrar el set de datos quedándonos únicamente con los registros aprobados (.summary == TRUE)
+    datos_limpios <- datos_georreferenciados[resultados_limpieza$.summary, ]
+    
+    # Paso 4.7.2: Comprobar si sobrevivió algún punto al cribado de calidad
+    if (nrow(datos_limpios) > 0) {
+      
+      # Paso 4.7.3: Definir la ruta física de guardado en la nueva carpeta limpia
+      ruta_salida_limpia <- file.path(carpeta_destino_clean, paste0(nombre_base, ".csv"))
+      
+      # Paso 4.7.4: Escribir el nuevo archivo CSV libre de errores espaciales
+      write.csv(datos_limpios, ruta_salida_limpia, row.names = FALSE)
+      
+      cat(sprintf("  -> Limpieza completada con éxito. Conservados %d de %d puntos.\n", 
+                  nrow(datos_limpios), nrow(datos_georreferenciados)))
+    } else {
+      cat("  -> Todos los registros fueron descartados por los filtros de calidad.\n")
+    }
+  }
+  
+  # Paso 4.8: Liberar la memoria RAM antes de pasar a la siguiente especie
+  rm(datos_especie, datos_georreferenciados, resultados_limpieza)
+  if (exists("datos_limpios")) rm(datos_limpios)
+  gc()
+}
+
+cat("\n====================\n")
+cat("¡Proceso de cribado finalizado! Los archivos limpios están listos en: dataset/csv_distribution_species_clean/\n")
+```
+
+## Paso 4: Convertir a GeoPackage
+
 ```{r}
 
 # ==========================================
-# 2. PROCESAMIENTO DE CSV A GEOPACKAGE (gpkg)
+# 1. PROCESAMIENTO DE CSV A GEOPACKAGE (gpkg)
 # ==========================================
 
-# 1. Definir rutas de las carpetas
-carpeta_csv <- here("dataset", "csv_distribution_species")
-carpeta_gpkg <- here("dataset", "distribution_species")
+# Paso 1: Definir rutas de las carpetas de origen y destino
+carpeta_csv <- here("dataset", "csv_distribution_species_clean")
+carpeta_gpkg <- here("dataset", "gpkg_distribution_species")
 
-# Crear la carpeta de destino si no existe
-dir.create(carpeta_gpkg, showWarnings = FALSE)
+# Paso 2: Crear la carpeta de destino para los GeoPackages si no existe previamente
+dir.create(carpeta_gpkg, showWarnings = FALSE, recursive = TRUE)
 
-# 2. Listar todos los archivos .csv
+# Paso 3: Listar todos los archivos .csv disponibles en la carpeta de origen
 archivos_csv <- list.files(path = carpeta_csv, pattern = "\\.csv$", full.names = TRUE)
 
 if(length(archivos_csv) == 0){
   stop("¡Ojo! No se han encontrado archivos .csv en la carpeta: ", carpeta_csv)
 }
 
-# 3. Bucle para transformar cada CSV local en GPKG
+# Paso 4: Bucle para transformar secuencialmente cada CSV local en GPKG
 for(ruta_archivo in archivos_csv){
   
-  # Extraer el nombre del archivo (sin la ruta ni la extensión .csv)
+  # Paso 4.1: Extraer el nombre base del archivo sin la ruta ni la extensión
   nombre_base <- tools::file_path_sans_ext(basename(ruta_archivo))
   
   cat("\n====================\n")
   cat("Procesando archivo local:", nombre_base, "\n")
   
-  # Leer el CSV local
+  # Paso 4.2: Leer el archivo CSV local
   datos <- read.csv(ruta_archivo)
   
-  # Comprobar por seguridad que el archivo no esté vacío
+  # Paso 4.3: Comprobar que el archivo contiene filas para procesar
   if(nrow(datos) == 0){
     cat("El archivo CSV está vacío, saltando...\n")
     next
   }
   
-  # Convertir el dataframe a objeto espacial (sf)
-  # Como los CSV ya están limpios, no hace falta volver a filtrar por NAs
+  # Paso 4.4: Filtrar la tabla para conservar únicamente las filas con coordenadas válidas
+  datos_limpios <- datos[!is.na(datos$decimalLongitude) & !is.na(datos$decimalLatitude), ]
+  
+  # Paso 4.5: Validar que existan registros espaciales tras el filtrado
+  if(nrow(datos_limpios) == 0){
+    cat("El archivo no tiene coordenadas espaciales utilizables, saltando...\n")
+    next
+  }
+  
+  # Paso 4.6: Convertir el dataframe limpio a objeto espacial (sf) asignando el CRS 4326
   datos_sf <- st_as_sf(
-    datos,
+    datos_limpios,
     coords = c("decimalLongitude", "decimalLatitude"),
     crs = 4326
   )
   
-  # Definir la ruta de salida del GeoPackage (.gpkg)
-  ruta_salida_gpkg <- here("dataset", "distribution_species", paste0(nombre_base, ".gpkg"))
+  # Paso 4.7: Definir la ruta física de salida para el nuevo GeoPackage (.gpkg)
+  ruta_salida_gpkg <- here("dataset", "gpkg_distribution_species", paste0(nombre_base, ".gpkg"))
   
-  # Guardar como GeoPackage (.gpkg)
+  # Paso 4.8: Escribir la capa espacial en el disco duro, sobrescribiendo si ya existía
   st_write(
     datos_sf,
     ruta_salida_gpkg,
-    delete_dsn = TRUE, # Si el archivo ya existía de antes, lo sobrescribe de forma limpia
+    delete_dsn = TRUE,
     quiet = TRUE
   )
   
   cat("Capa espacial guardada con éxito en:", paste0(nombre_base, ".gpkg"), "\n")
   
-  # Liberar memoria de los objetos grandes en R
-  rm(datos, datos_sf)
+  # Paso 4.9: Liberar la memoria RAM eliminando los objetos temporales creados
+  rm(datos, datos_limpios, datos_sf)
   gc()
 }
 
@@ -161,132 +850,3 @@ cat("¡Proceso completado! Todas las capas .gpkg se han generado correctamente.\
 ```
 
 Tenemos hasta ahora una carpeta con los geopackage(distribution_species) de cada una de ellas. Yo quiero **eliminar los puntos** que se me salen de las regiones florísticas. Ahora sería sobreponer y recortar.
-
-## Regiones florísticas
-
-Lo primero que vamos a hacer es separar de la capa original las diferentes regiones florísticas que son objeto de estudio en nuestro caso. Para ello primero cargaremos el shapefile y procederemos a agrupar por regiones. Todo ello siguiendo el artículo de –\>
-
-```         
-Loidi, J., & Vynokurov, D. (2024). The biogeographical kingdoms and regions of the world. Mediterranean Botany, 45(2), e92333. https://doi.org/10.5209/mbot.92333
-```
-
-```{r}
-floristic_regions_total <- st_read(here("dataset/floristic_regions_total/Map_biogeographical_regions.shp"))
-```
-
-```{r}
-# desactivar s2
-sf_use_s2(FALSE)
-
-# carpeta salida
-dir.create(
-  here("dataset", "floristic_regions"),
-  showWarnings = FALSE
-)
-
-# eliminar NA
-regions <- unique(
-  na.omit(floristic_regions_total$bg_region)
-)
-
-# bucle
-for(reg in regions){
-
-  cat("\nProcesando:", reg, "\n")
-
-  try({
-
-    # filtrar y fusionar
-    reg_union <- floristic_regions_total %>%
-      filter(bg_region == reg) %>%
-      st_make_valid() %>%
-      summarise()
-
-    # comprobar que no esté vacío
-    if(nrow(reg_union) == 0 || all(st_is_empty(reg_union))){
-      cat("Geometría vacía\n")
-      next
-    }
-
-    # nombre limpio
-    reg_name <- gsub(" ", "_", reg)
-
-    # guardar gpkg
-    st_write(
-      reg_union,
-      here(
-        "dataset",
-        "floristic_regions",
-        paste0(reg_name, ".gpkg")
-      ),
-      delete_dsn = TRUE,
-      quiet = TRUE
-    )
-
-    cat("Guardado:", reg_name, "\n")
-
-    rm(reg_union)
-    gc()
-
-  }, silent = TRUE)
-}
-
-sf_use_s2(TRUE)
-
-```
-
-- Hay que definir cuales son las regiones que vamos a usar. Después ver cómo eliminar los puntos de las especies que nos sobran.
-
-### Regiones florísticas del estudio
-
-En nuestro estudio tenemos concretamente X zonas de estudio:
-
-- Mediterranean region –\> 5
-
-- Saharo-Sindian –\> 8
-
-- Ethiopian-Southarabian –\> 13
-
-- Irano-Turanian –\> 7
-
-- Australia –\>
-
-  - Central Australian (Eremean) –\> 35
-
-  - Southwestern Australian –\> 37
-
-  - North Australian –\> 34 ?????????
-
-  - Tasmanian-Southeastern Australian –\> 36 ???????
-
-- Sudáfrica –\>
-
-  - Karoo-Namibian –\> 16
-
-  - Capensis –\> 38 ???????
-
-- Sudamérica –\>
-
-  - Andean-Pacific –\> 30
-
-  - Central Chilean-Western Patagonian –\> 33 ???????
-
-- Norteamérica –\>
-
-  - Western North American (California and Great Basin) –\> 11
-
-  - Madrean –\> 26
-
-  - Antillean-Mesoamerican –\> 27 ???
-
-  - Rocky Mountains –\> 10 ???????
-
-  - North American Atlantic –\> 9 ????????
-
-<!-- -->
-
-- Por otro lado tenemos que recortar las zonas protegidas del mundo que entran dentro de cada región para tener capas menos pesadas.
-
-Posteriormente, con esto hecho, ¿deberíamos transformar las **coordenadas de referencia** de cada especie al correspondiente de su país o región florística? Y una vez transformado, vamos a calcular un **buffer** de 250m alrededor de cada punto.
-
-Con el .gpkg del buffer de cada especie, ya quedaría la parte de sobreponer a la capa de zonas protegidas y calcular. ¿La capa de zonas protegidas debe contener los paises recortados con la regiones florísticas? ¿Y estas capa debe mantener separados los paises para poder discernir entre uno y otro?

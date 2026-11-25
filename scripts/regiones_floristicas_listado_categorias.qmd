@@ -1,0 +1,546 @@
+---
+title: "regiones_floristicas_listado_categorias"
+format: pdf
+editor: visual
+---
+
+Vamos a sacar una lista con las distintas categorías para TODAS Y CADA UNA de las regiones florísticas.
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "andean_pacific", "protected_andean_pacific_region_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "andean_pacific", "list_andean_pacific.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "australia", "protected_central_australian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "australia", "list_central_australian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+  "countries" = ISO3,
+  "designation in english" = DESIG_ENG,
+  "original designation" = DESIG
+)
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "australia", "protected_southwestern_asutralian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "australia", "list_southwestern_asutralian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "c_chilean_w_patagonian", "protected_c_chilean_w_patagonian_region_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "c_chilean_w_patagonian", "list_c_chilean_w_patagonian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "ethiopian_southarabian", "protected_ethiopian_southarabian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "ethiopian_southarabian", "list_ethiopian_southarabian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "irano_turanian", "protected_irano_turanian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "irano_turanian", "list_irano_turanian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "karoo_namibian", "protected_karoo_namibian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "karoo_namibian", "list_karoo_namibian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "madrean", "protected_madrean_region_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "madrean", "list_madrean_region.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "mediterranean", "protected_mediterranean_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "mediterranean", "list_mediterranean.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "saharo_sindian", "protected_saharo_sindian_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "saharo_sindian", "list_saharo_sindian.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
+
+```{r}
+
+# ==============================================================================
+# EXTRACCIÓN DE CATEGORÍAS DE PROTECCIÓN DESDE GEOPACKAGE A CSV (UNA SOLA CAPA)
+# ==============================================================================
+
+# Cargar librerías necesarias
+library(sf)
+library(dplyr)
+library(here)
+
+# 1. Definir rutas de entrada y salida de forma segura
+ruta_gpkg <- here("dataset", "protected_area", "western_n_america", "protected_western_n_america_region_floristic.gpkg")
+ruta_csv  <- here("dataset", "protected_area", "western_n_america", "list_western_n_america_region.csv")
+
+# 2. Obtener el nombre de la única capa que tiene el archivo
+capa_unica <- st_layers(ruta_gpkg)$name[1]
+
+# 3. Leer las columnas ISO3, DESIG_ENG y DESIG de esa capa
+datos <- st_read(
+  ruta_gpkg, 
+  layer = capa_unica, 
+  query = paste0("SELECT ISO3, DESIG_ENG, DESIG FROM ", capa_unica),
+  quiet = TRUE
+)
+
+# 4. Obtener combinaciones únicas y ordenarlas por país y designación en inglés
+tabla_categorias <- datos %>%
+  st_drop_geometry() %>%                # Nos aseguramos de quitar cualquier rastro espacial
+  distinct(ISO3, DESIG_ENG, DESIG) %>%  # Obtenemos filas únicas de las 3 columnas
+  arrange(ISO3, DESIG_ENG) %>%          # Ordenamos alfabéticamente por país y categoría
+  rename(                               # Renombramos las columnas aquí
+    "countries" = ISO3,
+    "designation in english" = DESIG_ENG,
+    "original designation" = DESIG
+  )
+
+# 5. Guardar el resultado en formato CSV
+write.csv(
+  tabla_categorias, 
+  file = ruta_csv, 
+  row.names = FALSE, 
+  fileEncoding = "UTF-8"
+)
+
+# Mensaje de éxito
+message("¡Proceso completado! Archivo con ISO3, DESIG_ENG y DESIG guardado en:\n", ruta_csv)
+```
