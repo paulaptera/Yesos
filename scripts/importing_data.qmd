@@ -23,12 +23,12 @@ library(maps)
 library(tools)
 library(tibble)
 library(readxl)
-
+library(readr)
 ```
 
-## VERIFICACIÓN TAXONÓMICA EN GBIF
+## TAXONOMIC VERIFICATION IN GBIF
 
-## Step 1: Read the taxa list and split each name into its parts
+### Step 1: Read the taxa list and split each name into its parts
 
 I open the sheet "All taxa" from the dataset. It has 1199 taxa, and I only keep the TAXON column. Then I clean the names and split each one into small pieces: genus, species epithet, subspecies or variety (if there is one), and rank.
 
@@ -51,7 +51,8 @@ species_list <- read_excel(
     # Guardo el número de fila para no perder el orden original
     row_id = row_number(),
     # Quito espacios al principio/final y los dobles del medio
-    TAXON = str_squish(TAXON)
+    TAXON = str_squish(TAXON),
+    Category = str_squish(tolower(Category))
   )
 
 # Ahora separo el nombre en trozos: género, epíteto, subsp./var., etc.
@@ -111,7 +112,7 @@ species_list <- species_list %>%
   )
 ```
 
-## Step 2: Helper functions to query GBIF
+### Step 2: Helper functions to query GBIF
 
 Here I only create the tools I will use later, so nothing is sent to GBIF yet. I make three small functions.
 
@@ -270,7 +271,7 @@ nombres_aceptados_bajo_especie <- function(usageKey_especie) {
 }
 ```
 
-## Step 3: Classify each taxon
+### Step 3: Classify each taxon
 
 This function checks one taxon at a time. If the name is a special one, it goes straight to `MANUAL_REVIEW`. If not, I ask GBIF about the species first, to get the list of accepted names for later checking. Then I ask about the exact taxon from my list, and I check that GBIF gives me the same name I asked for.
 
@@ -430,7 +431,7 @@ procesar_taxon <- function(genus, specificEpithet, infraspecificEpithet, rank,
 }
 ```
 
-## Step 4: Run the classification over the whole list
+### Step 4: Run the classification over the whole list
 
 I use a loop to repeat Step 3 for every taxon in my list. If one row fails, the loop keeps going. At the end, I put everything in one table, "tabla_final", and I count how many taxa are in each group.
 
@@ -487,7 +488,7 @@ tabla_final <- bind_rows(resultados)
 print(table(tabla_final$resultado))
 ```
 
-## Step 5: Export the results
+### Step 5: Export the results
 
 I save the final table as a CSV file, ready to open in Excel. The new columns are:
 
@@ -518,7 +519,7 @@ cat("=========================================\n")
 cat("Archivo guardado en dataset/verificacion_gbif/tabla_estado_taxonomico.csv\n")
 ```
 
-## Summary figure
+### Summary figure
 
 I make two simple charts that shows how many taxa are in each group, and I save them as an image.
 
@@ -565,213 +566,224 @@ ggsave(here("dataset", "verificacion_gbif", "grafico_barras_estado_taxonomico.pn
        plot = grafico_barras, width = 8, height = 6, dpi = 300)
 ```
 
-## **Paso 2:** Descarga de los CSV individuales desde GBIF.
+## Download one CSV per species from GBIF
 
-Ahora conectamos con gbif, descargamos los datos de la web que cumplan con el criterio de "Especimen preservado", nos descargamos cada especie en su csv y lo guardamos en su carpeta correspondiente.
+In this step I connect to GBIF and download the records of every accepted taxon from my list. I only ask for "preserved specimens", which are real specimens kept in herbaria and museums. Each taxon is saved in its own CSV file, all in the same folder.
+
+First, I read the table from the previous step and keep only the taxa marked as `ACCEPTED`. Then I loop over them, ask GBIF for their records and save each file. If a taxon already has its file, I skip it, so I can restart the loop without starting from zero. If the connection fails for a taxon, I note it and continue with the next one. At the end, I print a list of the taxa that failed so I can try them again.
 
 ```{r}
 # ==========================================================
-# PASO 1: CARGA DE LA TABLA TAXONÓMICA CONSOLIDADA
+# DOWNLOAD ONE CSV PER SPECIES FROM GBIF
 # ==========================================================
 
-# Paso 1.1: Leer el archivo de estado taxonómico generado en la etapa anterior
-tabla_final <- read.csv(
-  here("dataset", "verificacion_gbif", "tabla_estado_taxonomico.csv"), 
-  stringsAsFactors = FALSE
+# I read the table from the previous step
+tabla_final <- read_csv(
+  here("dataset", "verificacion_gbif", "tabla_estado_taxonomico.csv"),
+  show_col_types = FALSE
 )
 
-# ==========================================================
-# PASO 2: FILTRADO DE TAXONES VÁLIDOS Y ACEPTADOS
-# ==========================================================
-
-# Paso 2.1: Filtrar el set de datos para extraer únicamente los nombres científicos catalogados como "ACCEPTED"
-taxones_aceptados <- tabla_final %>%
+# I keep only the accepted names (one of each)
+accepted_taxa <- tabla_final %>%
   filter(resultado == "ACCEPTED") %>%
   pull(name_found_gbif) %>%
   unique()
 
-# Paso 2.2: Imprimir en la consola el volumen total de especies que serán procesadas de forma individual
-cat("Total de especies aceptadas a descargar individualmente:", length(taxones_aceptados), "\n")
+cat("Accepted taxa to download:", length(accepted_taxa), "\n")
 
-# ==========================================================
-# PASO 3: PREPARACIÓN DEL DIRECTORIO DE ALMACENAMIENTO
-# ==========================================================
+# Folder where I save one CSV per taxon
+out_dir <- here("dataset", "csv_distribution_species")
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-# Paso 3.1: Definir la ruta física de la carpeta para los archivos CSV de distribución
-carpeta_salida <- here("dataset", "csv_distribution_species")
+# Here I keep the taxa that fail because of the connection
+failed <- character(0)
 
-# Paso 3.2: Crear de manera segura la carpeta de salida en el disco si no existe previamente
-dir.create(carpeta_salida, showWarnings = FALSE, recursive = TRUE)
-
-# ==========================================================
-# PASO 4: EJECUCIÓN DEL BUCLE DE DESCARGA DESDE GBIF
-# ==========================================================
-
-# Paso 4.1: Iniciar la iteración secuencial para consultar registro por registro cada especie aceptada
-for (i in seq_along(taxones_aceptados)) {
+for (i in seq_along(accepted_taxa)) {
   
-  # Paso 4.1.1: Aislar el taxón correspondiente a la iteración actual
-  especie_actual <- taxones_aceptados[i]
-  cat(sprintf("[%d/%d] Descargando: %s...\n", i, length(taxones_aceptados), especie_actual))
+  taxon <- accepted_taxa[i]
   
-  # Paso 4.1.2: Normalizar y limpiar el nombre científico reemplazando espacios y caracteres por guiones bajos
-  nombre_archivo_limpio <- str_replace_all(especie_actual, "[[:punct:]\\s]+", "_")
-  ruta_csv <- file.path(carpeta_salida, paste0(nombre_archivo_limpio, ".csv"))
+  # File name from the taxon name: spaces and symbols become "_"
+  file_name <- taxon %>%
+    str_replace_all("[[:punct:]\\s]+", "_") %>%
+    str_remove("_$")
+  csv_path <- file.path(out_dir, paste0(file_name, ".csv"))
   
-  # Paso 4.1.3: Realizar la consulta a la API de GBIF limitando a especímenes preservados y controlando fallos de red
-  resultado <- tryCatch({
+  # If I already downloaded it (for example, I had to restart the loop), I skip it
+  if (file.exists(csv_path)) next
+  
+  cat(sprintf("[%d/%d] %s\n", i, length(accepted_taxa), taxon))
+  
+  # I ask GBIF only for preserved specimens.
+  # If the connection fails, tryCatch gives me NULL and the loop keeps going.
+  occ <- tryCatch(
     occ_search(
-      scientificName = especie_actual,
+      scientificName = taxon,
       basisOfRecord = "PRESERVED_SPECIMEN",
-      limit = 100000 
-    )
-  }, error = function(e) {
-    cat("  -> Error al conectar con GBIF para esta especie.\n")
-    NULL
-  })
+      limit = 100000
+    ),
+    error = function(e) NULL
+  )
   
-  # Paso 4.1.4: Validar que la respuesta contenga una estructura correcta y registros físicos aprovechables
-  if (!is.null(resultado) && !is.null(resultado$data) && nrow(resultado$data) > 0) {
+  if (is.null(occ)) {
+    cat("  -> connection error\n")
+    failed <- c(failed, taxon)
     
-    # Paso 4.1.5: Escribir el DataFrame con las ocurrencias obtenidas directamente en su archivo CSV individual
-    write.csv(resultado$data, ruta_csv, row.names = FALSE)
-    cat(sprintf("  -> Guardado con éxito (%d registros).\n", nrow(resultado$data)))
+  } else if (is.null(occ$data) || nrow(occ$data) == 0) {
+    cat("  -> no preserved specimens in GBIF\n")
     
   } else {
-    cat("  -> Sin registros de especímenes preservados en GBIF.\n")
+    write.csv(occ$data, csv_path, row.names = FALSE, fileEncoding = "UTF-8")
+    cat(sprintf("  -> saved (%d records)\n", nrow(occ$data)))
+    
+    # GBIF search cannot give more than 100,000 records, so I warn myself
+    if (nrow(occ$data) >= 100000) cat("  -> WARNING: 100,000 limit reached, records may be missing\n")
   }
   
-  # Paso 4.1.6: Pausar la ejecución por 0.2 segundos para respetar los límites de transferencia del servidor
+  # Short pause to be kind to the GBIF servers
   Sys.sleep(0.2)
 }
 
-# ==========================================================
-# PASO 5: NOTIFICACIÓN DE FINALIZACIÓN DEL PROCESO
-# ==========================================================
-
-# Paso 5.1: Imprimir en la consola el reporte de cierre del proceso de descarga
-cat("\n=========================================\n")
-cat("¡PROCESO FINALIZADO!\n")
-cat("Revisa la carpeta: dataset/ocurrencias_por_especie/\n")
-cat("=========================================\n")
-
+cat("\nDone! CSV files are in:", out_dir, "\n")
+if (length(failed) > 0) {
+  cat("These taxa failed (run the loop again to retry them):\n")
+  print(failed)
+}
 ```
 
-## Paso 3: Limpiar csv con CoordinateCleaner.
+At the end, I add two columns to the table: `csv_file` (the name of the CSV file of each taxon) and `has_specimens` (TRUE if GBIF has preserved specimens for that taxon, FALSE if not, and NA if the taxon was not accepted and I did not try to download it).
 
-Vamos a limpiar lo siguiente:
+```{r}
+# ==========================================================
+# MARK WHICH TAXA HAVE PRESERVED SPECIMENS
+# ==========================================================
 
-- **Ceros geográficos:** Coordenadas en el punto `(0, 0)`.
+# File name that each accepted taxon should have (same rule as in the download loop)
+tabla_final <- tabla_final %>%
+  mutate(
+    csv_file = if_else(
+      resultado == "ACCEPTED",
+      paste0(str_remove(str_replace_all(name_found_gbif, "[[:punct:]\\s]+", "_"), "_$"), ".csv"),
+      NA_character_
+    ),
+    # TRUE = I have its CSV | FALSE = accepted but no preserved specimens | NA = not downloaded
+    has_specimens = if_else(resultado == "ACCEPTED", csv_file %in% list.files(out_dir), NA)
+  )
 
-- **Coordenadas idénticas:** Latitud y longitud con el mismo valor (error de transcripción).
+# I save the table again so the next steps can use the new columns
+write_excel_csv(
+  tabla_final,
+  here("dataset", "verificacion_gbif", "tabla_estado_taxonomico.csv")
+)
+```
 
-- **Capitales:** Puntos ubicados exactamente sobre capitales de países.
+## Clean the coordinates with CoordinateCleaner
 
-- **Centroides:** Puntos en el centro geométrico de países o regiones (ubicaciones por defecto).
+GBIF records are not perfect, and many of them have wrong coordinates. In this step I clean them, taxon by taxon, using the package CoordinateCleaner. I remove records that:
 
-- **Instituciones científicas:** Museos, herbarios, zoológicos o universidades (dónde se guarda el espécimen, no dónde se recolectó).
+- are at (0, 0) ("zeros").
 
-- **Puntos en el mar:** Registros de especies terrestres que caen en el océano (por inversión de signos).
+- have the same value in latitude and longitude, which is probably a typing mistake ("equal").
 
-- **Outliers espaciales:** Observaciones geográficamente aisladas y muy alejadas del núcleo de la especie.
+- are exactly on a country capital ("capitals").
+
+- are in the centre of a country or region, which is a default place and not the real one ("centroids").
+
+- are on museums, herbaria or universities, because that is where the specimen is kept and not where it was collected ("institutions").
+
+- are in the sea ("seas").
+
+- are isolated and very far from the rest of the records of the same species ("outliers").
+
+First, I keep only the records that have coordinates. Then I run the tests and save a new CSV with the records that passed all of them, in a new folder. At the end, I also save a summary table that shows, for each taxon, how many records each test removed.
 
 ```{r}
 
 # ==========================================================
-#      LIMPIEZA DE COORDENADAS CON COORDINATECLEANER
+# STEP 3: CLEAN COORDINATES WITH COORDINATECLEANER
 # ==========================================================
 
+# Folders: raw CSV files in, clean CSV files out
+raw_dir   <- here("dataset", "csv_distribution_species")
+clean_dir <- here("dataset", "csv_distribution_species_clean")
+dir.create(clean_dir, showWarnings = FALSE, recursive = TRUE)
 
-# Paso 1: Definir las rutas de las carpetas de origen y de destino limpio
-carpeta_origen_csv <- here("dataset", "csv_distribution_species")
-carpeta_destino_clean <- here("dataset", "csv_distribution_species_clean")
+csv_files <- list.files(raw_dir, pattern = "\\.csv$", full.names = TRUE)
+if (length(csv_files) == 0) stop("No CSV files found in: ", raw_dir)
 
-# Paso 2: Crear la nueva carpeta de destino limpio si no existe previamente
-dir.create(carpeta_destino_clean, showWarnings = FALSE, recursive = TRUE)
+# I download the coastline once, before the loop (scale 10 = most detailed)
+sea_ref <- terra::vect(
+  rnaturalearth::ne_download(scale = 10, type = "land", category = "physical", returnclass = "sf")
+)
 
-# Paso 3: Listar todos los archivos CSV descargados que necesitan ser limpiados
-archivos_csv_originales <- list.files(path = carpeta_origen_csv, pattern = "\\.csv$", full.names = TRUE)
+# Here I save one row per taxon with what the cleaning did
+cleaning_log <- list()
 
-if(length(archivos_csv_originales) == 0){
-  stop("¡Ojo! No se han encontrado archivos .csv en la carpeta: ", carpeta_origen_csv)
-}
-
-# Paso 4: Bucle para aplicar los filtros geográficos especie por especie
-for (ruta_archivo in archivos_csv_originales) {
+for (f in csv_files) {
   
-  # Paso 4.1: Extraer el nombre base del archivo para identificar la especie
-  nombre_base <- tools::file_path_sans_ext(basename(ruta_archivo))
+  taxon <- tools::file_path_sans_ext(basename(f))
+  cat("\nCleaning:", taxon, "\n")
   
-  cat("\n====================\n")
-  cat("Limpiando coordenadas de:", nombre_base, "\n")
+  # I read gbifID as text so these long numbers never change
+  occ <- read.csv(f, colClasses = c(gbifID = "character"), encoding = "UTF-8")
   
-  # Paso 4.2: Leer el archivo CSV con las ocurrencias originales de la especie
-  datos_especie <- read.csv(ruta_archivo)
-  
-  # Paso 4.3: Comprobar que el archivo contiene registros antes de analizarlo
-  if(nrow(datos_especie) == 0){
-    cat("  -> El archivo original está vacío, saltando...\n")
+  # CoordinateCleaner fails with NAs, so I keep only records with coordinates
+  occ <- occ[!is.na(occ$decimalLongitude) & !is.na(occ$decimalLatitude), ]
+  if (nrow(occ) == 0) {
+    cat("  -> no coordinates, skipping\n")
     next
   }
   
-  # Paso 4.4: Asegurar que existan coordenadas válidas (no NAs) para evitar que falle CoordinateCleaner
-  datos_georreferenciados <- datos_especie[!is.na(datos_especie$decimalLongitude) & 
-                                             !is.na(datos_especie$decimalLatitude), ]
-  
-  # Paso 4.5: Comprobar que quedan registros con coordenadas válidas para analizar
-  if(nrow(datos_georreferenciados) == 0){
-    cat("  -> El archivo no contiene coordenadas para analizar, saltando...\n")
-    next
-  }
-  
-  # Paso 4.6: Ejecutar los tests automáticos de CoordinateCleaner (capitales, instituciones, mar, etc.)
-  resultados_limpieza <- tryCatch({
+  # Run the tests. If something fails, I print why and go to the next taxon.
+  res <- tryCatch(
     clean_coordinates(
-      x = datos_georreferenciados,
+      x = occ,
       lon = "decimalLongitude",
       lat = "decimalLatitude",
       species = "species",
-      tests = c("cap", "centroids", "equal", "institutions", "zeros", "sea", "outliers"),
-      verbose = FALSE # Silenciar mensajes individuales de la función para mantener limpia la consola
-    )
-  }, error = function(e) {
-    cat("  -> Error al procesar los filtros de CoordinateCleaner en esta especie.\n")
-    NULL
-  })
-  
-  # Paso 4.7: Guardar el CSV limpio solo si los tests de calidad se completaron correctamente
-  if (!is.null(resultados_limpieza)) {
-    
-    # Paso 4.7.1: Filtrar el set de datos quedándonos únicamente con los registros aprobados (.summary == TRUE)
-    datos_limpios <- datos_georreferenciados[resultados_limpieza$.summary, ]
-    
-    # Paso 4.7.2: Comprobar si sobrevivió algún punto al cribado de calidad
-    if (nrow(datos_limpios) > 0) {
-      
-      # Paso 4.7.3: Definir la ruta física de guardado en la nueva carpeta limpia
-      ruta_salida_limpia <- file.path(carpeta_destino_clean, paste0(nombre_base, ".csv"))
-      
-      # Paso 4.7.4: Escribir el nuevo archivo CSV libre de errores espaciales
-      write.csv(datos_limpios, ruta_salida_limpia, row.names = FALSE)
-      
-      cat(sprintf("  -> Limpieza completada con éxito. Conservados %d de %d puntos.\n", 
-                  nrow(datos_limpios), nrow(datos_georreferenciados)))
-    } else {
-      cat("  -> Todos los registros fueron descartados por los filtros de calidad.\n")
+      tests = c("zeros", "equal", "capitals", "centroids", "institutions", "seas", "outliers"),
+      seas_ref = sea_ref,   # the detailed coastline I downloaded above
+      verbose = FALSE
+    ),
+    error = function(e) {
+      message("  -> CoordinateCleaner failed: ", conditionMessage(e))
+      NULL
     }
-  }
+  )
+  if (is.null(res)) next
   
-  # Paso 4.8: Liberar la memoria RAM antes de pasar a la siguiente especie
-  rm(datos_especie, datos_georreferenciados, resultados_limpieza)
-  if (exists("datos_limpios")) rm(datos_limpios)
-  gc()
+  # Each test adds a TRUE/FALSE column that starts with "." (FALSE = flagged).
+  # I count how many records each test flagged (one record can fail several tests).
+  test_cols <- setdiff(grep("^\\.", names(res), value = TRUE), ".summary")
+  flagged <- colSums(!res[, test_cols, drop = FALSE])
+  
+  # I keep the records that passed all the tests, with my original columns only
+  clean <- occ[res$.summary, ]
+  
+  cleaning_log[[taxon]] <- data.frame(
+    taxon = taxon,
+    n_with_coords = nrow(occ),
+    n_kept = nrow(clean),
+    as.list(flagged)
+  )
+  
+  if (nrow(clean) > 0) {
+    write.csv(clean, file.path(clean_dir, basename(f)), row.names = FALSE, fileEncoding = "UTF-8")
+    cat(sprintf("  -> kept %d of %d records\n", nrow(clean), nrow(occ)))
+  } else {
+    cat("  -> all records were removed\n")
+  }
 }
 
-cat("\n====================\n")
-cat("¡Proceso de cribado finalizado! Los archivos limpios están listos en: dataset/csv_distribution_species_clean/\n")
+# One summary table for all taxa
+cleaning_summary <- bind_rows(cleaning_log)
+write.csv(cleaning_summary, here("dataset", "cleaning_summary.csv"), row.names = FALSE)
+
+cat("\nDone! Clean files are in:", clean_dir, "\n")
+cat("Records with coordinates:", sum(cleaning_summary$n_with_coords),
+    "| kept:", sum(cleaning_summary$n_kept), "\n")
 ```
 
-## Paso 4: Convertir a GeoPackage
+## Convertir a GeoPackage
 
 ```{r}
 
